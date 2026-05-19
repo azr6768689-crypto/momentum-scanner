@@ -43,6 +43,9 @@ ENV/
 *.swo
 .DS_Store
 
+# --- Deploy bundles (generated locally) --------------------------------------
+hf_space_upload/
+
 # --- Project-specific --------------------------------------------------------
 # Local market-data cache (large, regeneratable)
 data/cache/*
