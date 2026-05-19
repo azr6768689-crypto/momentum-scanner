@@ -1,0 +1,334 @@
+# =============================================================================
+# Master settings — every tunable parameter lives here.
+# =============================================================================
+# Edit this file to change behavior without touching code.
+# Each section maps to a layer of the system.
+#
+# IMPORTANT: numeric defaults below are *starting* values, not validated
+# optimal values. Final values will be chosen from backtest results (Phase 4+).
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 1. Data provider
+# -----------------------------------------------------------------------------
+data:
+  # Provider is selected by DATA_PROVIDER in .env, but you can override here.
+  # Setting this to null means "use .env".
+  provider_override: null    # null | "demo" | "tiingo" | "polygon" | "alpaca"
+
+  # Local cache (Parquet files on disk).
+  cache_dir: "data/cache"
+  cache_ttl_hours: 18        # daily bars are refreshed once a day
+  cache_enabled: true
+
+  # Rate limiting (per-provider; conservative defaults).
+  # These are *outbound* request rates we will not exceed.
+  rate_limits:
+    tiingo:
+      requests_per_hour: 800      # free tier is 1000/hr; we leave headroom
+      requests_per_second: 0.2    # one request every 5 seconds to avoid HTTP 429s
+    polygon:
+      requests_per_minute: 90     # starter tier is 100/min
+      requests_per_second: 5
+    alpaca:
+      requests_per_minute: 180
+
+  # Retry behavior on transient errors.
+  retry:
+    max_attempts: 4
+    initial_backoff_seconds: 1.0
+    max_backoff_seconds: 30.0
+
+  # How much history to keep locally per ticker.
+  history_years: 3            # enough for 52-week highs + indicator warmup
+
+# -----------------------------------------------------------------------------
+# 2. Universe selection
+# -----------------------------------------------------------------------------
+# mode: how we build the list of tickers to scan.
+#
+# full_liquid_us_stocks → download ALL US-listed symbols, then filter.
+#                         This is the production mode.
+# starter              → use the hand-picked lists in config/universe.yaml.
+#                         Only for demo/testing with 136 symbols.
+#
+# When mode=full_liquid_us_stocks, the pipeline reads from:
+#     data/universe/final_universe.csv
+# which is built by:
+#     python scripts/refresh_universe.py
+#
+universe:
+  mode: "starter"                 # "full_liquid_us_stocks" | "starter"
+
+  # Which asset types to include in the final universe
+  include_etfs: false             # normal (non-leveraged) ETFs
+  include_leveraged_etfs: false   # TQQQ, SOXL, etc. — different risk profile
+
+  # Source for the full universe download
+  source: "nasdaq_trader"         # "nasdaq_trader" | "provider" (future)
+
+  # Hard exclusions (always dropped before liquidity filter)
+  exclude:
+    recent_ipos_days: 30          # skip names without 30 days of history
+    explicit_tickers: []          # add specific symbols to exclude here
+
+  # Cap on how many tickers per run (safety valve for API rate limits)
+  max_tickers_per_run: 5000
+
+  # How long to cache the downloaded symbol list before re-downloading
+  cache_hours: 24
+
+  # Files (all under data/universe/)
+  files:
+    all_us_symbols: "all_us_symbols.csv"
+    us_common_stocks: "us_common_stocks.csv"
+    us_etfs: "us_etfs.csv"
+    us_leveraged_etfs: "us_leveraged_etfs.csv"
+    final_universe: "final_universe.csv"
+
+  # --- Starter mode only (used when mode=starter) ---
+  starter_lists:
+    - "fixed_liquid_momentum"
+
+# -----------------------------------------------------------------------------
+# 3. Liquidity gates (Stage 1 of the filter stack)
+# -----------------------------------------------------------------------------
+liquidity_filters:
+  min_price: 10.0              # dollars; options: 5 / 10 / 15 / 20
+  min_avg_volume_20d: 700000   # shares; options: 500k / 700k / 1M / 2M
+  min_avg_dollar_volume_20d: 10000000   # dollars; options: 5M / 10M / 20M / 50M
+
+# -----------------------------------------------------------------------------
+# 4. Trend gates (Stage 2)
+# -----------------------------------------------------------------------------
+trend_filters:
+  require_close_above_sma20: true
+  require_close_above_sma50: true
+  require_sma20_above_sma50: false      # preferred but not strict
+  require_sma50_rising: true            # SMA50 sloping up over last 10 bars
+  sma50_slope_lookback_bars: 10
+
+# -----------------------------------------------------------------------------
+# 5. Relative strength gates (Stage 3)
+# -----------------------------------------------------------------------------
+relative_strength:
+  benchmark_primary: "SPY"
+  benchmark_secondary: "QQQ"
+  lookback_windows_days: [5, 10, 20]
+  require_positive_vs_primary_20d: true
+  require_positive_vs_secondary_20d: false   # preferred not required
+
+# -----------------------------------------------------------------------------
+# 6. Volume gates (Stage 4)
+# -----------------------------------------------------------------------------
+volume_filters:
+  rvol_lookback_days: 20
+  rvol_min_general: 1.5
+  rvol_min_breakout: 2.0
+  rvol_min_continuation_high_gain: 3.0    # required when day gain >10%
+
+# -----------------------------------------------------------------------------
+# 7. Risk / reward gates (Stage 6)
+# -----------------------------------------------------------------------------
+risk_reward:
+  min_rr_to_target_1: 2.0
+  max_stop_distance_atr: 1.5
+  min_resistance_distance_atr: 1.5
+  atr_period: 14
+
+# -----------------------------------------------------------------------------
+# 8. Extension filter (Stage 7)
+# -----------------------------------------------------------------------------
+extension:
+  max_pct_above_vwap: 4.0           # %, intraday only
+  max_atr_above_sma20: 1.5
+  max_day_gain_pct_no_setup: 25.0   # absolute hard ceiling
+
+# -----------------------------------------------------------------------------
+# 9. Continuation scanner specifics
+# -----------------------------------------------------------------------------
+continuation:
+  day_gain_pct_min: 3.0
+  day_gain_pct_preferred_max: 15.0
+  day_gain_pct_absolute_max: 25.0    # only allowed with clean consolidation
+
+# -----------------------------------------------------------------------------
+# 10. Scoring (Stage 8)
+# -----------------------------------------------------------------------------
+# Weights must sum to 100. The extension_penalty is subtracted, not added,
+# but its magnitude is capped at the listed value.
+scoring:
+  weights:
+    trend_strength:         12
+    setup_quality:          14
+    relative_volume:        12
+    rs_vs_primary:          10
+    rs_vs_secondary:         5
+    sector_strength:         5     # disabled in Phase 1 (no sector data yet)
+    dollar_volume:           6
+    price_action_quality:    8
+    risk_reward:            10
+    remaining_upside:        8
+    catalyst:                5     # disabled in Phase 1
+    spread_quality:          5     # disabled in Phase 1
+  extension_penalty_max:     5     # subtracted from final score, max 5
+  threshold_include:        75     # below this, excluded from main report
+  threshold_strong:         85     # marks "very strong" band
+  threshold_elite:          90     # marks "elite" band
+
+# -----------------------------------------------------------------------------
+# 11. Status classifier
+# -----------------------------------------------------------------------------
+# How statuses are assigned after scoring. Values are documentation;
+# the logic is implemented in src/scoring/status_classifier.py.
+status:
+  rules:
+    trigger:     "all gates pass AND breakout confirmed today"
+    watch:       "all gates pass AND breakout pending"
+    wait:        "score qualifies BUT extended"
+    ignore:      "score qualifies BUT poor R/R or resistance too close"
+    invalidated: "candidate yesterday BUT lost key level today"
+
+# -----------------------------------------------------------------------------
+# 12. Market regime (informational, also feeds scoring later)
+# -----------------------------------------------------------------------------
+market_regime:
+  trend_proxy: "SPY"
+  trend_lookback_days: 50
+  vol_proxy: "VIX"                 # if available; else realized vol on SPY
+  vol_high_threshold: 25
+  vol_low_threshold: 13
+
+# -----------------------------------------------------------------------------
+# 13. Reporting
+# -----------------------------------------------------------------------------
+reporting:
+  output_dir: "data/reports"
+  csv_filename_format: "{date}_report.csv"      # main report
+  watchlist_filename_format: "{date}_watchlist.csv"  # watchlist
+  summary_filename_format: "{date}_summary.txt"
+  diagnostics_filename_format: "{date}_diagnostics.txt"
+  rejected_filename_format: "{date}_rejected.csv"
+  top_n_in_summary: 5
+  include_invalidated_in_csv: true              # for the audit trail
+
+# -----------------------------------------------------------------------------
+# 15. Report mode — overall selectivity preset
+# -----------------------------------------------------------------------------
+# Choose one of: strict | balanced | exploratory
+#
+# strict       → show only score 85+ in the main report
+#                everything else goes to the "rejected/exploratory" CSV
+# balanced     → show score 75+ in the main report (DEFAULT)
+# exploratory  → show score 60+ in the main report, marked as low-confidence
+#
+# The mode adjusts thresholds below. Individual thresholds can still be
+# overridden by editing the explicit values in section 16.
+#
+# Group I update: every mode now defines TWO thresholds:
+#   - main_report_score: above this = strong candidates (MAIN REPORT)
+#   - watchlist_score:   between this and main = watchlist (interesting, not ready)
+#   - below watchlist_score: rejected
+report_mode:
+  active: "balanced"     # strict | balanced | exploratory
+
+  presets:
+    strict:
+      main_report_score: 85
+      watchlist_score: 75
+      label_low_confidence: false
+    balanced:
+      main_report_score: 75
+      watchlist_score: 60
+      label_low_confidence: false
+    exploratory:
+      main_report_score: 70
+      watchlist_score: 50
+      label_low_confidence: true
+
+# -----------------------------------------------------------------------------
+# 16. Configurable thresholds — single source of truth
+# -----------------------------------------------------------------------------
+# These are the thresholds the user asked to expose explicitly.
+# Set to null to fall back to the report_mode preset value.
+# Set to a number to override unconditionally.
+thresholds:
+  main_report_score: null         # null = use report_mode preset
+  watchlist_score: null           # null = use report_mode preset
+  min_risk_reward: 2.0            # hard floor for inclusion
+  max_distance_from_sma20: 8.0    # % above SMA20 before counted as extended
+  max_atr_extension: 1.5          # ATRs above SMA20
+  min_relative_volume: 1.5        # baseline RVOL requirement
+
+# -----------------------------------------------------------------------------
+# 17. Full liquidity & tradability filter  (Group G)
+# -----------------------------------------------------------------------------
+# This runs BEFORE the momentum scanners. Only stocks that pass every gate
+# here will be evaluated by strategies. The goal: start broad, remove
+# everything illiquid or untradable, then hand quality names to scanners.
+liquidity_v2:
+
+  # -- 1. Price gate --
+  min_price: 10.0               # default hard floor
+  # Optional stricter modes (change this one number)
+  # 15.0 for mid-cap focused, 20.0 for large-cap only
+  # If you set this to 5.0, the system auto-requires stronger volume
+  low_price_volume_multiplier: 2.0  # vol requirement multiplied by this for stocks $5-$10
+
+  # -- 2. Average daily volume (20-day) --
+  min_avg_volume: 700000
+  preferred_avg_volume: 1000000
+
+  # -- 3. Average daily dollar volume (20-day) --
+  min_avg_dollar_volume: 10000000       # $10M
+  preferred_avg_dollar_volume: 20000000 # $20M
+
+  # -- 4. Relative volume --
+  min_rvol_for_signals: 1.5   # minimum RVOL for signal generation
+  strong_rvol: 2.0
+  exceptional_rvol: 3.0
+
+  # -- 5. Current-day dollar volume --
+  min_current_dollar_volume: 1000000    # $1M today; low bar to avoid dead sessions
+  # Set to 0 to disable (useful for pre-market runs on daily bars)
+
+  # -- 6. Bid/ask spread (if quote data available) --
+  max_spread_pct: 0.50        # 50 bps; stocks wider than this get a penalty
+  warn_spread_pct: 0.30       # 30 bps; above this gets a warning
+  apply_spread_filter: true   # set false to ignore spread even if data exists
+
+  # -- 7. Exchange & symbol quality --
+  # Controlled by constants in src/data/base.py.
+  # Acceptable: NYSE, NASDAQ, AMEX, ARCA, BATS
+  # Excluded:   OTC, PINK, plus warrants/rights/units/preferred/test issues
+
+  # -- 8. Float & market cap --
+  min_market_cap: 300000000         # $300M; below this = warning
+  warn_market_cap: 500000000        # $500M; below this but above min = "small cap" flag
+  low_float_threshold: 10000000     # 10M shares; below = low-float warning
+  # We do NOT hard-exclude low-float; we add a warning + scoring penalty.
+
+  # -- 9. Liquidity score weights (must sum to 100) --
+  score_weights:
+    price_quality: 10
+    avg_volume: 15
+    avg_dollar_volume: 20
+    current_volume: 10
+    current_dollar_volume: 10
+    spread_quality: 10            # defaults to neutral 50 if no quote data
+    exchange_quality: 10
+    market_cap_quality: 10        # defaults to neutral 50 if no metadata
+    missing_data_penalty: 5       # subtracted for each missing data field
+
+  # -- 10. Minimum liquidity score to pass to scanners --
+  min_liquidity_score: 40         # below this = hard exclude
+  warn_liquidity_score: 60        # below this = warning in report
+
+# -----------------------------------------------------------------------------
+# 14. Logging
+# -----------------------------------------------------------------------------
+logging:
+  level: "INFO"                                  # DEBUG|INFO|WARNING|ERROR
+  file: "logs/momentum.log"
+  rotation: "10 MB"
+  retention: "14 days"

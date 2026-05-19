@@ -1,0 +1,270 @@
+# =============================================================================
+# Universe definitions
+# =============================================================================
+# This file lists the tickers we may scan. The actual scan universe is the
+# UNION of all lists named in settings.yaml -> universe.active_lists,
+# minus exclusions, minus anything that fails liquidity filters.
+#
+# PHASE 1 PHILOSOPHY: small, liquid, high-quality universe.
+# Better to scan 200 great names than 3000 mediocre ones.
+#
+# HOW TO EXPAND LATER:
+#   - "sp500_full" and "nasdaq100_full" can be auto-loaded from Wikipedia
+#     or a paid index-membership feed. For Phase 1 we hard-list the most
+#     liquid names so the system can run with ZERO external dependencies.
+#   - Once you have a Tiingo/Polygon key, you can refresh these lists via
+#     scripts/refresh_universe.py (built in Phase 1 Group 7).
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Fixed liquid momentum universe — practical daily scan
+# -----------------------------------------------------------------------------
+fixed_liquid_momentum:
+  - AAPL
+  - MSFT
+  - NVDA
+  - AMZN
+  - META
+  - GOOGL
+  - TSLA
+  - AMD
+  - AVGO
+  - NFLX
+  - SMCI
+  - PLTR
+  - ARM
+  - MU
+  - CRWD
+  - COIN
+  - MSTR
+  - MARA
+  - CLSK
+  - HOOD
+  - SOFI
+  - RDDT
+  - APP
+  - SHOP
+  - UBER
+  - ABNB
+  - SNOW
+  - NET
+  - DDOG
+  - TWLO
+  - SBUX
+  - PYPL
+  - XLE
+  - DIG
+  - SOXL
+  - TQQQ
+  - SSO
+  - QQQ
+  - SPY
+
+# -----------------------------------------------------------------------------
+# S&P 500 — Phase 1 starter subset (top ~80 most liquid mega/large caps)
+# -----------------------------------------------------------------------------
+# This is intentionally a SUBSET of the real S&P 500 for Phase 1.
+# We pick the highest-liquidity names so the system has clean data to chew on.
+# Replace with the full 500 once your data provider is live and tested.
+sp500:
+  - AAPL    # Apple
+  - MSFT    # Microsoft
+  - NVDA    # Nvidia
+  - GOOGL   # Alphabet A
+  - GOOG    # Alphabet C
+  - AMZN    # Amazon
+  - META    # Meta
+  - TSLA    # Tesla
+  - AVGO    # Broadcom
+  - BRK.B   # Berkshire B  (may need symbol mapping per provider)
+  - JPM     # JPMorgan
+  - V       # Visa
+  - MA      # Mastercard
+  - UNH     # UnitedHealth
+  - XOM     # Exxon
+  - JNJ     # Johnson & Johnson
+  - PG      # Procter & Gamble
+  - LLY     # Eli Lilly
+  - HD      # Home Depot
+  - COST    # Costco
+  - WMT     # Walmart
+  - ABBV    # AbbVie
+  - BAC     # Bank of America
+  - CVX     # Chevron
+  - KO      # Coca-Cola
+  - PEP     # PepsiCo
+  - ORCL    # Oracle
+  - MRK     # Merck
+  - CRM     # Salesforce
+  - ADBE    # Adobe
+  - NFLX    # Netflix
+  - AMD     # AMD
+  - TMO     # Thermo Fisher
+  - LIN     # Linde
+  - ACN     # Accenture
+  - WFC     # Wells Fargo
+  - DIS     # Disney
+  - CSCO    # Cisco
+  - ABT     # Abbott
+  - MCD     # McDonald's
+  - DHR     # Danaher
+  - VZ      # Verizon
+  - QCOM    # Qualcomm
+  - INTU    # Intuit
+  - INTC    # Intel
+  - TXN     # Texas Instruments
+  - IBM     # IBM
+  - GE      # General Electric
+  - CAT     # Caterpillar
+  - NOW     # ServiceNow
+  - GS      # Goldman Sachs
+  - AMAT    # Applied Materials
+  - ISRG    # Intuitive Surgical
+  - SPGI    # S&P Global
+  - BLK     # BlackRock
+  - BKNG    # Booking
+  - AXP     # American Express
+  - PFE     # Pfizer
+  - MS      # Morgan Stanley
+  - T       # AT&T
+  - HON     # Honeywell
+  - LOW     # Lowe's
+  - UBER    # Uber
+  - SCHW    # Charles Schwab
+  - C       # Citigroup
+  - BA      # Boeing
+  - DE      # John Deere
+  - LRCX    # Lam Research
+  - MU      # Micron
+  - ADI     # Analog Devices
+  - PANW    # Palo Alto Networks
+  - KLAC    # KLA
+  - SBUX    # Starbucks
+  - PLD     # Prologis
+  - MDT     # Medtronic
+  - GILD    # Gilead
+  - REGN    # Regeneron
+  - VRTX    # Vertex
+  - SNPS    # Synopsys
+  - CDNS    # Cadence
+  - MMC     # Marsh McLennan
+  - ETN     # Eaton
+  - NKE     # Nike
+
+# -----------------------------------------------------------------------------
+# Nasdaq 100 — Phase 1 starter subset
+# -----------------------------------------------------------------------------
+# Significant overlap with sp500 above; the union will be deduplicated.
+# Listed here for completeness when you flip to nasdaq100-only mode.
+nasdaq100:
+  - AAPL
+  - MSFT
+  - NVDA
+  - GOOGL
+  - GOOG
+  - AMZN
+  - META
+  - TSLA
+  - AVGO
+  - COST
+  - NFLX
+  - AMD
+  - PEP
+  - ADBE
+  - CSCO
+  - INTU
+  - QCOM
+  - TXN
+  - AMAT
+  - INTC
+  - BKNG
+  - ISRG
+  - LRCX
+  - MU
+  - ADI
+  - PANW
+  - KLAC
+  - SBUX
+  - GILD
+  - REGN
+  - VRTX
+  - SNPS
+  - CDNS
+  - MELI    # MercadoLibre
+  - ASML    # ASML
+  - ABNB    # Airbnb
+  - PYPL    # PayPal
+  - MAR     # Marriott
+  - CRWD    # CrowdStrike
+  - FTNT    # Fortinet
+  - MDLZ    # Mondelez
+  - ADP     # Automatic Data Processing
+  - PDD     # PDD Holdings
+  - CMCSA   # Comcast
+  - CHTR    # Charter
+  - WDAY    # Workday
+  - DDOG    # Datadog
+  - MNST    # Monster
+  - ORLY    # O'Reilly
+  - CSX     # CSX
+  - ROST    # Ross Stores
+  - PCAR    # PACCAR
+  - FANG    # Diamondback Energy
+  - KDP     # Keurig Dr Pepper
+  - PAYX    # Paychex
+  - AEP     # American Electric Power
+  - EXC     # Exelon
+  - CTAS    # Cintas
+
+# -----------------------------------------------------------------------------
+# Liquid ETFs — sector and broad-market
+# -----------------------------------------------------------------------------
+# Useful both as tradeable instruments and as sector benchmarks.
+liquid_etfs:
+  # Broad market
+  - SPY     # S&P 500
+  - QQQ     # Nasdaq 100
+  - IWM     # Russell 2000
+  - DIA     # Dow Jones
+  - VTI     # Total US market
+
+  # Sector ETFs (SPDR sectors)
+  - XLK     # Technology
+  - XLF     # Financials
+  - XLE     # Energy
+  - XLV     # Health Care
+  - XLY     # Consumer Discretionary
+  - XLP     # Consumer Staples
+  - XLI     # Industrials
+  - XLB     # Materials
+  - XLU     # Utilities
+  - XLRE    # Real Estate
+  - XLC     # Communication Services
+
+  # Thematic / industry
+  - SMH     # Semiconductors
+  - SOXX    # Semiconductors (alt)
+  - XBI     # Biotech
+  - IBB     # Biotech (alt)
+  - ITB     # Home Construction
+  - KRE     # Regional Banks
+  - GDX     # Gold Miners
+  - GLD     # Gold
+  - SLV     # Silver
+  - USO     # Oil
+  - TLT     # 20+ year Treasuries
+  - HYG     # High Yield Corp Bonds
+
+# -----------------------------------------------------------------------------
+# Explicit exclusions (always dropped regardless of other settings)
+# -----------------------------------------------------------------------------
+# Names listed here will NEVER appear in scans even if added above.
+always_exclude: []
+
+# -----------------------------------------------------------------------------
+# Symbol mapping notes (provider-specific quirks)
+# -----------------------------------------------------------------------------
+# Some symbols differ across providers (BRK.B vs BRK-B vs BRK/B).
+# The data adapter is responsible for translating these. See:
+#   src/data/base_adapter.py -> normalize_symbol()
+# Phase 1 default mapping handles Tiingo's convention (dot notation).

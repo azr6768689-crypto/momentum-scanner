@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: momentum-scanner
+    env: python
+    plan: starter
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: python scripts/start_render.py
+    envVars:
+      - key: DATA_PROVIDER
+        value: polygon
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: SCANNER_UNIVERSE_CSV
+        value: data/universe/polygon_liquid_us.csv
+      - key: SCANNER_SECTOR_MAP
+        value: data/universe/sector_map.csv
+      - key: SCANNER_INTRADAY_TOP
+        value: "50"
+      - key: SCANNER_NEWS_TOP
+        value: "100"
+      - key: SCANNER_OUTPUT_SUFFIX
+        value: full_us_10
+      - key: ENABLE_DASHBOARD_SCAN_BUTTON
+        value: "true"
+      - key: RUN_SCAN_ON_STARTUP
+        value: "false"
+      - key: POLYGON_API_KEY
+        sync: false
+      - key: DASHBOARD_PASSWORD
+        sync: false

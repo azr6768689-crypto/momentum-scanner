@@ -1,0 +1,83 @@
+# =============================================================================
+# Git ignore rules
+# =============================================================================
+
+# --- Secrets — NEVER commit these -------------------------------------------
+.env
+.env.local
+*.key
+secrets/
+
+# --- Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# --- Virtual environments ----------------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+
+# --- IDE / editors -----------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# --- Project-specific --------------------------------------------------------
+# Local market-data cache (large, regeneratable)
+data/cache/*
+!data/cache/.gitkeep
+
+# Daily reports (regenerated each run)
+data/reports/*
+!data/reports/.gitkeep
+
+# Universe lists may be tracked or not — by default we keep our checked-in YAML
+# but ignore any auto-downloaded ticker lists.
+data/universe/*.csv
+data/universe/*.json
+!data/universe/.gitkeep
+!data/universe/polygon_liquid_us.csv
+!data/universe/sector_map.csv
+!data/universe/final_universe.csv
+
+# Logs
+logs/*
+!logs/.gitkeep
+
+# Streamlit local state
+.streamlit/secrets.toml
+
+# --- Testing & coverage ------------------------------------------------------
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# --- Type-checker cache ------------------------------------------------------
+.mypy_cache/
+.dmypy.json
+
+# --- Jupyter (if used for exploration) --------------------------------------
+.ipynb_checkpoints/
