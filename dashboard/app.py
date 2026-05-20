@@ -294,15 +294,121 @@ def _scan_panel_enabled() -> bool:
 
 
 def _init_scan_ui_state() -> None:
-    """Reset legacy collapse flags."""
-    for legacy in (
-        "scan_sidebar_collapsed",
-        "scan_panel_open",
-        "scan_controls_visible",
-        "scan_ui_visible",
-        "_scan_ui_reset_v3",
-    ):
-        st.session_state.pop(legacy, None)
+    """Scan drawer open by default on first visit."""
+    st.session_state.setdefault("scan_panel_open", True)
+
+
+def _default_scan_profile_id() -> str:
+    from src.scan_profiles import list_profiles
+
+    profiles = list_profiles()
+    profile_ids = [p.id for p in profiles]
+    default_profile = os.getenv("SCAN_PROFILE", "simple")
+    if default_profile not in profile_ids:
+        default_profile = "simple"
+    return default_profile
+
+
+def _handle_cloud_scan_lifecycle() -> None:
+    """Auto-scan, polling, and report reload — always active (not tied to panel visibility)."""
+    if not _is_cloud_space():
+        return
+    _maybe_auto_scan_on_entry(_default_scan_profile_id())
+    _maybe_reload_after_scan_ok()
+    try:
+        from src.cloud_scan_job import get_status
+    except Exception:
+        return
+    if get_status().get("state") == "running" and hasattr(st, "autorefresh"):
+        st.autorefresh(interval=10_000, key="cloud_scan_global_poll")
+
+
+def _render_scan_drawer_tab() -> None:
+    """Fixed edge tab + vertical rail — toggles the scan panel in the sidebar."""
+    if not _scan_panel_enabled():
+        return
+
+    is_open = st.session_state.get("scan_panel_open", True)
+    rail_active = ""
+    if _is_cloud_space():
+        try:
+            from src.cloud_scan_job import get_scan_progress, get_status
+
+            job = get_status()
+            if job.get("state") == "running":
+                prog = job.get("progress") or get_scan_progress()
+                pct = max(5, min(100, int(prog.get("percent", 0))))
+                rail_active = (
+                    f'<div class="scan-drawer-rail-fill" style="height:{pct}%;"></div>'
+                )
+        except Exception:
+            pass
+
+    force_sidebar_css = ""
+    if is_open:
+        force_sidebar_css = """
+        section[data-testid="stSidebar"] {
+            transform: translateX(0) !important;
+            visibility: visible !important;
+            min-width: 21rem !important;
+        }
+        """
+
+    st.markdown(
+        f"""
+        <style>
+        {force_sidebar_css}
+        .scan-drawer-rail {{
+            position: fixed;
+            left: 0;
+            top: 52px;
+            bottom: 32px;
+            width: 4px;
+            background: rgba(37, 99, 235, 0.22);
+            z-index: 999998;
+            pointer-events: none;
+            border-radius: 0 2px 2px 0;
+            overflow: hidden;
+        }}
+        .scan-drawer-rail-fill {{
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: linear-gradient(to top, #06b6d4, #2563eb);
+        }}
+        .scan-drawer-tab-anchor + div[data-testid="stVerticalBlockBorderWrapper"] button,
+        .scan-drawer-tab-anchor + div button {{
+            position: fixed !important;
+            left: 0 !important;
+            top: 58px !important;
+            z-index: 999999 !important;
+            width: 28px !important;
+            height: 28px !important;
+            min-width: 28px !important;
+            min-height: 28px !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            border-radius: 0 7px 7px 0 !important;
+            border: 2px solid rgba(147, 197, 253, 0.85) !important;
+            border-left: none !important;
+            background: linear-gradient(135deg, #2563eb, #06b6d4) !important;
+            color: #ffffff !important;
+            font-size: 0.78rem !important;
+            font-weight: 900 !important;
+            line-height: 1 !important;
+            box-shadow: 4px 4px 18px rgba(37, 99, 235, 0.55) !important;
+        }}
+        </style>
+        <div class="scan-drawer-rail">{rail_active}</div>
+        <div class="scan-drawer-tab-anchor"></div>
+        """,
+        unsafe_allow_html=True,
+    )
+    label = "✕" if is_open else "🔎"
+    if st.button(label, key="scan_drawer_tab_btn", help="פתיחת / סגירת חלונית סריקה"):
+        st.session_state["scan_panel_open"] = not is_open
+        _rerun_app()
 
 
 def _render_cloud_access_panel() -> None:
@@ -759,27 +865,21 @@ st.markdown(
     [data-testid="stSidebar"] [data-testid="stExpander"] summary:hover {
         background: linear-gradient(135deg, rgba(37, 99, 235, 0.62), rgba(6, 182, 212, 0.38)) !important;
     }
-    .main-scan-panel {
-        padding: 18px 20px 8px;
-        border-radius: 18px;
-        border: 2px solid rgba(37, 99, 235, 0.55);
-        background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 58, 138, 0.35));
-        margin-bottom: 8px;
+    .sidebar-scan-box {
+        padding: 12px 13px 4px;
+        border-radius: 16px;
+        border: 2px solid rgba(37, 99, 235, 0.48);
+        background: rgba(15, 23, 42, 0.78);
+        margin-bottom: 14px;
         direction: rtl;
     }
-    .main-scan-title {
-        color: #fef3c7;
-        font-size: 1.35rem;
-        font-weight: 900;
-        margin-bottom: 4px;
-    }
-    .main-scan-wrap .stButton > button[kind="primary"] {
+    [data-testid="stSidebar"] .sidebar-scan-box + div .stButton > button[kind="primary"] {
         background: linear-gradient(135deg, #2563eb, #06b6d4) !important;
         border: 2px solid rgba(147, 197, 253, 0.75) !important;
         color: #ffffff !important;
         font-weight: 900 !important;
-        font-size: 1.05rem !important;
-        min-height: 3.2rem !important;
+        font-size: 1rem !important;
+        min-height: 3rem !important;
         box-shadow: 0 10px 28px rgba(37, 99, 235, 0.45) !important;
     }
     [data-testid="stSidebar"] .stSlider [data-baseweb="slider"] > div > div {
@@ -2172,15 +2272,13 @@ def render_signal_card(row: pd.Series) -> None:
             st.write(f"**Target 2:** ${row['Target 2']:.2f}")
 
 
-def _render_scan_controls(*, key_prefix: str = "main_scan") -> None:
-    """Scan profile picker + run button + progress."""
+def _render_scan_controls(*, key_prefix: str = "sidebar_scan") -> None:
+    """Scan profile picker + run button + progress (UI only; lifecycle runs in main)."""
     from src.scan_profiles import list_profiles
 
     profiles = list_profiles()
     profile_labels = {p.id: p.label_he for p in profiles}
-    default_profile = os.getenv("SCAN_PROFILE", "simple")
-    if default_profile not in profile_labels:
-        default_profile = "simple"
+    default_profile = _default_scan_profile_id()
     profile_ids = [p.id for p in profiles]
     selected_profile = _sidebar_selector(
         "רמת סריקה",
@@ -2191,14 +2289,9 @@ def _render_scan_controls(*, key_prefix: str = "main_scan") -> None:
     )
     selected = next(p for p in profiles if p.id == selected_profile)
 
-    cloud = _is_cloud_space()
     from src.cloud_scan_job import get_status, start_full_scan
 
-    _maybe_auto_scan_on_entry(selected_profile)
     _render_cloud_scan_progress()
-    job = get_status()
-    if cloud and job.get("state") == "running" and hasattr(st, "autorefresh"):
-        st.autorefresh(interval=15_000, key=f"{key_prefix}_cloud_scan_progress_poll")
 
     scan_clicked = st.button(
         f"▶ סריקה — {selected.label_he}",
@@ -2216,6 +2309,7 @@ def _render_scan_controls(*, key_prefix: str = "main_scan") -> None:
                 if started:
                     st.session_state["last_scan_profile"] = selected_profile
                     st.session_state.pop("_polygon_preflight_cache", None)
+                    st.session_state.pop("auto_scan_on_entry_done", None)
                     _rerun_app()
         else:
             with st.spinner("סורק…"):
@@ -2236,24 +2330,16 @@ def _render_scan_controls(*, key_prefix: str = "main_scan") -> None:
         st.session_state["last_scan_profile"] = job.get("profile", selected_profile)
 
 
-def _render_main_scan_panel(*, key_prefix: str = "main_scan") -> None:
-    """Scan in the main page — visible even when the sidebar is collapsed."""
+def _render_scan_sidebar_panel(*, key_prefix: str = "sidebar_scan") -> None:
+    """Scan panel at the top of the sidebar."""
     st.markdown(
         """
-        <div class="main-scan-panel">
-            <div class="main-scan-title">🔎 סריקה</div>
+        <div class="sidebar-scan-box">
+            <div class="sidebar-section-title" style="margin-top:0;">🔎 סריקה</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    with st.container():
-        st.markdown('<div class="main-scan-wrap"></div>', unsafe_allow_html=True)
-        _render_scan_controls(key_prefix=key_prefix)
-
-
-def _render_scan_sidebar_panel(*, key_prefix: str = "sidebar_scan") -> None:
-    """Scan controls in sidebar."""
-    _render_sidebar_section("סריקה")
     _render_scan_controls(key_prefix=key_prefix)
 
 
@@ -2263,15 +2349,18 @@ def _render_scan_sidebar_panel(*, key_prefix: str = "sidebar_scan") -> None:
 
 def main() -> None:
     _init_scan_ui_state()
+    _handle_cloud_scan_lifecycle()
+    _render_scan_drawer_tab()
     # --- Sidebar: report selection ---
     with st.sidebar:
-        _render_sidebar_brand()
-        _render_cloud_access_panel()
-        if _scan_panel_enabled() and not _is_cloud_space():
+        if _scan_panel_enabled() and st.session_state.get("scan_panel_open", True):
             try:
                 _render_scan_sidebar_panel()
             except Exception as exc:
                 st.error(f"שגיאה במקטע סריקה: {exc}")
+
+        _render_sidebar_brand()
+        _render_cloud_access_panel()
 
         _render_sidebar_section("דוח")
         reports = _discover_report_paths()
@@ -2317,10 +2406,6 @@ def main() -> None:
                 csv_path.stat().st_size / 1024,
                 mtime.strftime("%d/%m/%Y %H:%M:%S"),
             )
-
-    show_main_scan = _scan_panel_enabled() and (_is_cloud_space() or csv_path is None)
-    if show_main_scan:
-        _render_main_scan_panel()
 
     if csv_path is None:
         st.markdown("### אין דוח להצגה עדיין")
