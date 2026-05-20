@@ -1,0 +1,131 @@
+"""
+Scan depth presets — same universe and core scoring; differ in enrichment & backtest depth.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class ScanProfile:
+    id: str
+    label_he: str
+    summary_he: str
+    reliability_he: str
+    time_mac_cache_he: str
+    time_mac_cold_he: str
+    time_colab_cache_he: str
+    time_colab_cold_he: str
+    fast_parallel: bool
+    skip_per_ticker_backtest: bool
+    trim_bars: int | None
+    intraday_top: int
+    news_top: int
+    skip_weekly_sparklines: bool
+    output_suffix: str
+    timeout_seconds: int
+
+
+PROFILES: dict[str, ScanProfile] = {
+    "simple": ScanProfile(
+        id="simple",
+        label_he="פשוטה (מהירה)",
+        summary_he="כל 2,114 המניות · דירוג מלא · בלי חדשות/שעתי",
+        reliability_he=(
+            "אמינות גבוהה לדירוג ולסינון: אותו מנוע דפוסים, מגמה, מוסדי ושוק. "
+            "ללא Backtest היסטורי לכל מניה וללא חדשות Polygon — מתאים לסריקה יומית מהירה."
+        ),
+        time_mac_cache_he="כ־15–25 שניות",
+        time_mac_cold_he="כ־15–25 דקות (פעם ראשונה / קאש פג)",
+        time_colab_cache_he="כ־30–60 שניות",
+        time_colab_cold_he="כ־20–40 דקות (פעם ראשונה ב-Drive)",
+        fast_parallel=True,
+        skip_per_ticker_backtest=True,
+        trim_bars=320,
+        intraday_top=0,
+        news_top=0,
+        skip_weekly_sparklines=True,
+        output_suffix="us_simple",
+        timeout_seconds=600,
+    ),
+    "medium": ScanProfile(
+        id="medium",
+        label_he="בינונית (מאוזנת)",
+        summary_he="כל המניות · גרפים שעתיים ל-25 הראשונות · חדשות ל-40",
+        reliability_he=(
+            "אמינות גבוהה + העשרה: היסטוריית מחיר מלאה לדפוסים, חדשות וגרף שעתי "
+            "למניות המובילות בלבד. ללא Backtest כבד לכל מניה — איזון זמן/עומק."
+        ),
+        time_mac_cache_he="כ־45–90 שניות",
+        time_mac_cold_he="כ־18–30 דקות",
+        time_colab_cache_he="כ־1.5–3 דקות",
+        time_colab_cold_he="כ־25–45 דקות",
+        fast_parallel=True,
+        skip_per_ticker_backtest=True,
+        trim_bars=None,
+        intraday_top=25,
+        news_top=40,
+        skip_weekly_sparklines=False,
+        output_suffix="us_medium",
+        timeout_seconds=900,
+    ),
+    "full": ScanProfile(
+        id="full",
+        label_he="מקיפה (מלאה)",
+        summary_he="כל המניות · Backtest לכל מניה · שעתי 50 · חדשות 100",
+        reliability_he=(
+            "העומק המקסימלי: Backtest היסטורי מקומי לכל מניה, אגרגציית אסטרטגיות, "
+            "חדשות וגרפים שעתיים לטופ. הכי אמין לניתוח לפני החלטה — הכי ארוך."
+        ),
+        time_mac_cache_he="כ־1.5–3 דקות",
+        time_mac_cold_he="כ־20–40 דקות",
+        time_colab_cache_he="כ־3–6 דקות",
+        time_colab_cold_he="כ־35–70 דקות",
+        fast_parallel=True,
+        skip_per_ticker_backtest=False,
+        trim_bars=None,
+        intraday_top=50,
+        news_top=100,
+        skip_weekly_sparklines=False,
+        output_suffix="us_full",
+        timeout_seconds=2400,
+    ),
+}
+
+DEFAULT_PROFILE_ID = "simple"
+
+
+def list_profiles() -> list[ScanProfile]:
+    return [PROFILES[k] for k in ("simple", "medium", "full")]
+
+
+def get_profile(profile_id: str | None) -> ScanProfile:
+    key = (profile_id or os.getenv("SCAN_PROFILE", DEFAULT_PROFILE_ID)).strip().lower()
+    if key not in PROFILES:
+        raise ValueError(f"Unknown scan profile '{profile_id}'. Choose: simple, medium, full.")
+    return PROFILES[key]
+
+
+def apply_profile_to_env(profile: ScanProfile) -> None:
+    """Set process env vars consumed by the scanner and report builder."""
+    os.environ["SCAN_PROFILE"] = profile.id
+    os.environ["SCAN_FAST"] = "1" if profile.fast_parallel else "0"
+    os.environ["SCAN_SKIP_BACKTEST"] = "1" if profile.skip_per_ticker_backtest else "0"
+    os.environ["SCAN_SKIP_WEEKLY_SPARKLINES"] = "1" if profile.skip_weekly_sparklines else "0"
+    if profile.trim_bars is not None:
+        os.environ["SCAN_TRIM_BARS"] = str(profile.trim_bars)
+    else:
+        os.environ.pop("SCAN_TRIM_BARS", None)
+
+
+def profile_help_markdown(profile: ScanProfile) -> str:
+    return (
+        f"**{profile.label_he}** — {profile.summary_he}\n\n"
+        f"{profile.reliability_he}\n\n"
+        f"**זמן משוער (Mac, קאש חם):** {profile.time_mac_cache_he}  \n"
+        f"**זמן משוער (Mac, ללא קאש):** {profile.time_mac_cold_he}  \n"
+        f"**זמן משוער (Colab + Drive, קאש חם):** {profile.time_colab_cache_he}  \n"
+        f"**זמן משוער (Colab, ללא קאש):** {profile.time_colab_cold_he}"
+    )

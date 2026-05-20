@@ -18,7 +18,7 @@ data:
 
   # Local cache (Parquet files on disk).
   cache_dir: "data/cache"
-  cache_ttl_hours: 18        # daily bars are refreshed once a day
+  cache_ttl_hours: 72        # daily bars: reuse cache up to 3 days (fast rescans)
   cache_enabled: true
 
   # Rate limiting (per-provider; conservative defaults).

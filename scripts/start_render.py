@@ -30,20 +30,19 @@ def _run_initial_scan() -> None:
     news_top = os.getenv("SCANNER_NEWS_TOP", "100")
     output_suffix = os.getenv("SCANNER_OUTPUT_SUFFIX", "full_us_10")
 
+    profile = os.getenv("SCAN_PROFILE", "simple")
     cmd = [
         sys.executable,
         "scripts/run_pro_scanner.py",
+        "--profile",
+        profile,
         "--sector-map",
         str(sector_map),
-        "--intraday-top",
-        intraday_top,
-        "--news-top",
-        news_top,
         "--output-suffix",
         output_suffix,
     ]
     if universe_csv.exists():
-        cmd[2:2] = ["--universe-csv", str(universe_csv)]
+        cmd.extend(["--universe-csv", str(universe_csv)])
     else:
         print(f"Universe CSV not found at {universe_csv}; using configured starter universe.", flush=True)
 

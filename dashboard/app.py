@@ -85,15 +85,61 @@ def _rerun_app() -> None:
         st.experimental_rerun()
 
 
+def _render_sidebar_brand() -> None:
+    st.markdown(
+        """
+        <div class="sidebar-brand">
+            <div class="sidebar-brand-top">
+                <div>
+                    <div class="sidebar-brand-title">Momentum Scanner</div>
+                    <div class="sidebar-brand-sub">סורק לונג מקצועי · US Equities</div>
+                </div>
+                <div class="sidebar-brand-logo">MS</div>
+            </div>
+            <span class="sidebar-pill">Decision Support</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_sidebar_section(title: str) -> None:
+    st.markdown(f'<div class="sidebar-section-title">{html.escape(title)}</div>', unsafe_allow_html=True)
+
+
+def _render_sidebar_file_card(name: str, size_kb: float, generated: str) -> None:
+    st.markdown(
+        f"""
+        <div class="sidebar-card">
+            <div class="label">קובץ דוח</div>
+            <div class="value">{html.escape(name)}</div>
+            <div class="label" style="margin-top:8px;">גודל</div>
+            <div class="value">{size_kb:.1f} KB</div>
+            <div class="label" style="margin-top:8px;">נוצר</div>
+            <div class="value">{html.escape(generated)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _require_dashboard_password() -> None:
     password = os.getenv("DASHBOARD_PASSWORD", "").strip()
     if not password or st.session_state.get("dashboard_authenticated"):
         return
 
-    st.title("Momentum Scanner")
+    st.markdown(
+        """
+        <div class="hero-card" style="max-width: 520px; margin: 4rem auto 1rem;">
+            <div class="hero-title" style="font-size: 2rem;">Momentum Scanner</div>
+            <div class="hero-subtitle">כניסה מאובטחת לסורק הפרטי</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     st.caption("המערכת מוגנת בסיסמה כי היא מכילה כלי סריקה פרטי ונתוני API.")
     entered = st.text_input("סיסמה", type="password")
-    if st.button("כניסה", use_container_width=True):
+    if st.button("כניסה", use_container_width=True, type="primary"):
         if hmac.compare_digest(entered, password):
             st.session_state["dashboard_authenticated"] = True
             _rerun_app()
@@ -116,6 +162,8 @@ st.markdown(
     }
     .block-container {
         padding-top: 1.25rem;
+        padding-left: 1rem;
+        padding-right: 1rem;
     }
     .stApp::before {
         content: "";
@@ -176,10 +224,174 @@ st.markdown(
         font-weight: 900 !important;
     }
     [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%);
+        background:
+            radial-gradient(circle at 0% 0%, rgba(56, 189, 248, 0.22), transparent 42%),
+            radial-gradient(circle at 100% 8%, rgba(168, 85, 247, 0.20), transparent 38%),
+            linear-gradient(180deg, #0b1224 0%, #111b33 48%, #0f172a 100%) !important;
+        border-right: 1px solid rgba(96, 165, 250, 0.28);
+        box-shadow: 12px 0 40px rgba(2, 6, 23, 0.45);
     }
-    [data-testid="stSidebar"] * {
-        color: #0f172a !important;
+    [data-testid="stSidebar"] > div:first-child {
+        background: transparent !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] li,
+    [data-testid="stSidebar"] [data-testid="stCaptionContainer"],
+    [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p,
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] .st-emotion-cache-ue6h4q {
+        color: #dbeafe !important;
+    }
+    [data-testid="stSidebar"] h1,
+    [data-testid="stSidebar"] h2,
+    [data-testid="stSidebar"] h3,
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h1,
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h2,
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 {
+        color: #f8fafc !important;
+        letter-spacing: -0.02em;
+    }
+    [data-testid="stSidebar"] hr {
+        border-color: rgba(96, 165, 250, 0.22) !important;
+        margin: 0.85rem 0 !important;
+    }
+    .sidebar-brand {
+        padding: 14px 14px 12px;
+        margin: 0 0 10px 0;
+        border-radius: 18px;
+        border: 1px solid rgba(96, 165, 250, 0.35);
+        background:
+            radial-gradient(circle at 88% 0%, rgba(244, 114, 182, 0.28), transparent 36%),
+            radial-gradient(circle at 8% 10%, rgba(34, 211, 238, 0.24), transparent 34%),
+            linear-gradient(145deg, rgba(30, 64, 175, 0.72), rgba(15, 23, 42, 0.88));
+        box-shadow: 0 16px 36px rgba(2, 6, 23, 0.35);
+        direction: rtl;
+    }
+    .sidebar-brand-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 8px;
+    }
+    .sidebar-brand-logo {
+        width: 42px;
+        height: 42px;
+        border-radius: 14px;
+        display: grid;
+        place-items: center;
+        font-weight: 950;
+        font-size: 0.95rem;
+        color: #f8fafc;
+        background: linear-gradient(135deg, #2563eb, #06b6d4);
+        box-shadow: 0 0 22px rgba(34, 211, 238, 0.35);
+    }
+    .sidebar-brand-title {
+        color: #f8fafc;
+        font-size: 1.05rem;
+        font-weight: 900;
+        line-height: 1.2;
+    }
+    .sidebar-brand-sub {
+        color: #bfdbfe;
+        font-size: 0.76rem;
+        line-height: 1.35;
+    }
+    .sidebar-pill {
+        display: inline-block;
+        padding: 3px 9px;
+        border-radius: 999px;
+        font-size: 0.68rem;
+        font-weight: 800;
+        color: #ecfeff;
+        background: rgba(34, 211, 238, 0.18);
+        border: 1px solid rgba(34, 211, 238, 0.35);
+    }
+    .sidebar-section-title {
+        color: #93c5fd;
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin: 2px 0 10px;
+        direction: rtl;
+    }
+    .sidebar-card {
+        padding: 12px 13px;
+        border-radius: 16px;
+        border: 1px solid rgba(96, 165, 250, 0.24);
+        background: rgba(15, 23, 42, 0.72);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        margin-bottom: 10px;
+        direction: rtl;
+    }
+    .sidebar-card .label {
+        color: #94a3b8;
+        font-size: 0.68rem;
+        font-weight: 700;
+        margin-bottom: 3px;
+    }
+    .sidebar-card .value {
+        color: #f8fafc;
+        font-size: 0.86rem;
+        font-weight: 700;
+        line-height: 1.35;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+    }
+    .sidebar-profile-chip {
+        display: inline-block;
+        margin-top: 6px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 0.72rem;
+        font-weight: 800;
+        color: #f8fafc;
+        background: linear-gradient(135deg, rgba(37, 99, 235, 0.55), rgba(6, 182, 212, 0.45));
+        border: 1px solid rgba(125, 211, 252, 0.35);
+    }
+    [data-testid="stSidebar"] div.stButton > button[kind="primary"],
+    [data-testid="stSidebar"] div.stButton > button {
+        background: linear-gradient(135deg, #1d4ed8 0%, #0891b2 100%) !important;
+        color: #ffffff !important;
+        border: 1px solid rgba(125, 211, 252, 0.55) !important;
+        border-radius: 14px !important;
+        min-height: 2.65rem;
+        font-weight: 850 !important;
+        box-shadow: 0 12px 28px rgba(14, 165, 233, 0.28) !important;
+    }
+    [data-testid="stSidebar"] div.stButton > button:hover {
+        border-color: rgba(34, 211, 238, 0.95) !important;
+        box-shadow: 0 16px 34px rgba(34, 211, 238, 0.32) !important;
+        transform: translateY(-1px);
+    }
+    [data-testid="stSidebar"] [data-baseweb="select"] > div,
+    [data-testid="stSidebar"] input,
+    [data-testid="stSidebar"] textarea {
+        background: rgba(15, 23, 42, 0.88) !important;
+        border-color: rgba(96, 165, 250, 0.35) !important;
+        color: #f8fafc !important;
+        border-radius: 12px !important;
+    }
+    [data-testid="stSidebar"] [data-baseweb="tag"] {
+        background: rgba(37, 99, 235, 0.35) !important;
+        color: #eff6ff !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stExpander"] {
+        border: 1px solid rgba(96, 165, 250, 0.22);
+        border-radius: 14px;
+        background: rgba(15, 23, 42, 0.55);
+        overflow: hidden;
+    }
+    [data-testid="stSidebar"] [data-testid="stExpander"] summary {
+        color: #e2e8f0 !important;
+        font-weight: 750 !important;
+    }
+    [data-testid="stSidebar"] .stSlider [data-baseweb="slider"] > div > div {
+        background: linear-gradient(90deg, #2563eb, #06b6d4) !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stAlert"] {
+        border-radius: 12px;
     }
     button[kind="secondary"],
     [data-baseweb="tab"] {
@@ -320,29 +532,43 @@ st.markdown(
             0 18px 42px rgba(2, 6, 23, 0.36);
         margin-bottom: 20px;
     }
+    .pro-table-outer {
+        width: 100%;
+        max-width: 100%;
+        overflow-x: hidden;
+        overflow-y: visible;
+        margin-bottom: 8px;
+    }
     .pro-table-wrap {
+        width: 100%;
+        max-width: 100%;
         border-radius: 18px;
-        overflow-x: auto;
-        overflow-y: hidden;
         border: 1px solid rgba(96,165,250,0.35);
         box-shadow: 0 18px 44px rgba(2,6,23,0.55);
         background: #020617;
+        overflow: hidden;
     }
     table.pro-table {
         width: 100%;
-        min-width: 1080px;
+        max-width: 100%;
+        min-width: 0;
+        table-layout: fixed;
         border-collapse: collapse;
-        font-size: 0.72rem;
+        font-size: clamp(0.5rem, 0.42vw + 0.34rem, 0.72rem);
         color: #e5e7eb;
         direction: rtl;
     }
     .pro-table thead th {
         background: linear-gradient(180deg, #2563eb, #1d4ed8);
         color: #f8fafc;
-        padding: 5px 6px;
+        padding: clamp(2px, 0.35vw, 5px) clamp(2px, 0.45vw, 6px);
         text-align: right;
         border-bottom: 1px solid rgba(191,219,254,0.28);
-        white-space: nowrap;
+        white-space: normal;
+        line-height: 1.15;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+        hyphens: auto;
     }
     .pro-table tbody tr {
         background: rgba(15,23,42,0.94);
@@ -354,10 +580,24 @@ st.markdown(
         box-shadow: inset 3px 0 0 #60a5fa;
     }
     .pro-table td {
-        padding: 3px 6px;
+        padding: clamp(2px, 0.35vw, 4px) clamp(2px, 0.45vw, 6px);
         vertical-align: middle;
-        max-width: 240px;
-        line-height: 1.18;
+        line-height: 1.15;
+        white-space: normal;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+        max-width: 0;
+    }
+    @media (max-width: 1280px) {
+        table.pro-table { font-size: clamp(0.48rem, 0.5vw + 0.3rem, 0.66rem); }
+        .ticker-cell { font-size: clamp(0.62rem, 0.55vw + 0.42rem, 0.82rem) !important; }
+        .prob-pill { min-width: 38px; padding: 2px 5px; font-size: 0.68rem; }
+    }
+    @media (max-width: 900px) {
+        table.pro-table { font-size: clamp(0.44rem, 0.58vw + 0.24rem, 0.58rem); }
+        .ticker-cell { font-size: clamp(0.56rem, 0.62vw + 0.36rem, 0.74rem) !important; }
+        .setup-badge, .momentum-badge { font-size: 0.62rem; padding: 2px 5px; }
+        .prob-pill { min-width: 34px; font-size: 0.62rem; }
     }
     .ticker-cell {
         color: #ffffff;
@@ -611,19 +851,32 @@ st.markdown(
         color: #bbf7d0;
         font-size: .78rem;
     }
-    @media (max-width: 1200px) {
-        .top-movers-grid,
+    @media (max-width: 1500px) {
+        .top-movers-grid {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+    }
+    @media (max-width: 1100px) {
+        .top-movers-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
         .strategy-summary-grid {
             grid-template-columns: repeat(2, minmax(0, 1fr));
         }
+        .strategy-stats {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
     }
-    @media (max-width: 760px) {
+    @media (max-width: 700px) {
         .top-movers-grid,
         .strategy-summary-grid {
             grid-template-columns: 1fr;
         }
         .hero-card {
             padding: 22px;
+        }
+        .hero-title {
+            font-size: 1.75rem;
         }
     }
     </style>
@@ -666,28 +919,29 @@ def list_all_reports() -> list[Path]:
     return sorted(REPORTS_DIR.glob("*_report.csv"), key=lambda path: path.stat().st_mtime, reverse=True)
 
 
-def run_professional_scan_from_dashboard() -> tuple[bool, str]:
+def run_professional_scan_from_dashboard(profile_id: str) -> tuple[bool, str]:
+    from src.scan_profiles import get_profile
+
+    profile = get_profile(profile_id)
     universe_csv = Path(os.getenv("SCANNER_UNIVERSE_CSV", "data/universe/polygon_liquid_us.csv"))
     sector_map = Path(os.getenv("SCANNER_SECTOR_MAP", "data/universe/sector_map.csv"))
-    intraday_top = os.getenv("SCANNER_INTRADAY_TOP", "50")
-    news_top = os.getenv("SCANNER_NEWS_TOP", "100")
-    output_suffix = os.getenv("SCANNER_OUTPUT_SUFFIX", "full_us_10")
-    timeout_seconds = int(os.getenv("SCAN_TIMEOUT_SECONDS", "1200"))
+    timeout_seconds = profile.timeout_seconds
+    override = os.getenv("SCAN_TIMEOUT_SECONDS", "").strip()
+    if override.isdigit():
+        timeout_seconds = int(override)
 
     cmd = [
         sys.executable,
         "scripts/run_pro_scanner.py",
+        "--profile",
+        profile.id,
         "--sector-map",
         str(sector_map),
-        "--intraday-top",
-        intraday_top,
-        "--news-top",
-        news_top,
         "--output-suffix",
-        output_suffix,
+        os.getenv("SCANNER_OUTPUT_SUFFIX", profile.output_suffix),
     ]
     if universe_csv.exists():
-        cmd[2:2] = ["--universe-csv", str(universe_csv)]
+        cmd.extend(["--universe-csv", str(universe_csv)])
 
     try:
         completed = subprocess.run(
@@ -877,12 +1131,41 @@ def main() -> None:
 
     # --- Sidebar: report selection ---
     with st.sidebar:
-        st.header("📁 Report")
+        _render_sidebar_brand()
 
         if os.getenv("ENABLE_DASHBOARD_SCAN_BUTTON", "true").lower() not in {"0", "false", "no"}:
-            if st.button("הרץ סריקה חדשה", use_container_width=True):
-                with st.spinner("מריץ סריקה חדשה. זה יכול לקחת כמה דקות..."):
-                    ok, output = run_professional_scan_from_dashboard()
+            from src.scan_profiles import list_profiles, profile_help_markdown
+
+            _render_sidebar_section("סריקה")
+            profiles = list_profiles()
+            profile_labels = {p.id: p.label_he for p in profiles}
+            default_profile = os.getenv("SCAN_PROFILE", "simple")
+            if default_profile not in profile_labels:
+                default_profile = "simple"
+            profile_ids = [p.id for p in profiles]
+            selected_profile = st.selectbox(
+                "רמת סריקה",
+                options=profile_ids,
+                index=profile_ids.index(default_profile),
+                format_func=lambda pid: profile_labels[pid],
+                key="scan_profile_select",
+            )
+            selected = next(p for p in profiles if p.id == selected_profile)
+            st.markdown(
+                f'<span class="sidebar-profile-chip">{html.escape(selected.label_he)}</span>',
+                unsafe_allow_html=True,
+            )
+            st.caption(selected.summary_he)
+            with st.expander("זמנים משוערים ואמינות", expanded=False):
+                st.markdown(profile_help_markdown(selected))
+
+            if st.button("▶ הרץ סריקה חדשה", use_container_width=True, type="primary"):
+                spinner = (
+                    f"מריץ סריקה {selected.label_he}… "
+                    f"(משוער {selected.time_mac_cache_he} עם קאש)"
+                )
+                with st.spinner(spinner):
+                    ok, output = run_professional_scan_from_dashboard(selected_profile)
                 st.cache_data.clear()
                 if ok:
                     st.success("הסריקה הסתיימה בהצלחה. הדוח עודכן.")
@@ -894,6 +1177,9 @@ def main() -> None:
                     with st.expander("פלט שגיאה", expanded=True):
                         st.text(output)
 
+            st.divider()
+
+        _render_sidebar_section("דוח")
         reports = list_all_reports()
         if not reports:
             st.error("No reports found in `data/reports/`.")
@@ -909,7 +1195,7 @@ def main() -> None:
             0,
         )
         selected_date = st.selectbox(
-            "Report date",
+            "תאריך דוח",
             options=report_labels,
             index=default_report_index,
             key="report_date_full_scan_default",
@@ -921,16 +1207,18 @@ def main() -> None:
             if path.exists()
         }
         selected_report_type = st.selectbox(
-            "Report type",
+            "סוג דוח",
             options=list(available_variants.keys()),
             index=0,
         )
         csv_path = available_variants[selected_report_type]
 
-        st.markdown(f"**File:** `{csv_path.name}`")
-        st.markdown(f"**Size:** {csv_path.stat().st_size / 1024:.1f} KB")
         mtime = datetime.fromtimestamp(csv_path.stat().st_mtime)
-        st.markdown(f"**Generated:** {mtime.strftime('%H:%M:%S')}")
+        _render_sidebar_file_card(
+            csv_path.name,
+            csv_path.stat().st_size / 1024,
+            mtime.strftime("%d/%m/%Y %H:%M:%S"),
+        )
 
     # --- Load report ---
     csv_stat = csv_path.stat()
@@ -1229,11 +1517,12 @@ def main() -> None:
 def _render_hebrew_professional_dashboard(df: pd.DataFrame, selected_date: str, selected_report_type: str) -> None:
     strategy_state_key = f"selected_strategy_{selected_date}_{selected_report_type}"
     with st.sidebar:
-        st.header("סינון")
+        st.divider()
+        _render_sidebar_section("סינון תוצאות")
         levels = list(df["רמה"].dropna().unique()) if "רמה" in df.columns else []
         selected_levels = st.multiselect("רמה", options=levels, default=levels)
         min_prob = st.slider("הסתברות מינימלית", 0, 100, 0, step=5)
-        ticker_filter = st.text_input("סימבול", value="").strip().upper()
+        ticker_filter = st.text_input("סימבול", value="", placeholder="NVDA, AAPL…").strip().upper()
 
     base_filtered = df.copy()
     if selected_levels and "רמה" in base_filtered.columns:
@@ -1330,96 +1619,6 @@ def _render_hebrew_professional_dashboard(df: pd.DataFrame, selected_date: str, 
         _render_symbol_details(selected_row)
 
 
-def _hebrew_column_config() -> dict:
-    return {
-        "גרף קטן": st.column_config.LineChartColumn("גרף קטן", width="medium"),
-        "הסתברות %": st.column_config.ProgressColumn(
-            "הסתברות %",
-            min_value=0,
-            max_value=100,
-            format="%d%%",
-            width="small",
-        ),
-        "סיכוי למהלך %": st.column_config.ProgressColumn(
-            "סיכוי למהלך %",
-            min_value=0,
-            max_value=100,
-            format="%d%%",
-            width="small",
-        ),
-        "ציון מוסדי": st.column_config.ProgressColumn(
-            "ציון מוסדי",
-            min_value=0,
-            max_value=100,
-            format="%d",
-            width="small",
-        ),
-        "חוזק יחסי SPY 20 יום %": st.column_config.NumberColumn(format="%+.2f%%"),
-        "חוזק יחסי QQQ 20 יום %": st.column_config.NumberColumn(format="%+.2f%%"),
-        "חוזק סקטור 20 יום %": st.column_config.NumberColumn(format="%+.2f%%"),
-        "ציון סקטור": st.column_config.ProgressColumn(
-            "ציון סקטור",
-            min_value=0,
-            max_value=100,
-            format="%d",
-            width="small",
-        ),
-        "ציון שוק": st.column_config.ProgressColumn(
-            "ציון שוק",
-            min_value=0,
-            max_value=100,
-            format="%d",
-            width="small",
-        ),
-        "הצלחה היסטורית %": st.column_config.ProgressColumn(
-            "הצלחה היסטורית %",
-            min_value=0,
-            max_value=100,
-            format="%.1f%%",
-            width="small",
-        ),
-        "ציון חדשות": st.column_config.ProgressColumn(
-            "ציון חדשות",
-            min_value=0,
-            max_value=100,
-            format="%d",
-            width="small",
-        ),
-        "תשואה היסטורית ממוצעת %": st.column_config.NumberColumn(format="%+.2f%%"),
-        "מחיר אחרון": st.column_config.NumberColumn(format="$%.2f"),
-        "שינוי %": st.column_config.NumberColumn(format="%+.2f%%"),
-        "ווליום יחסי": st.column_config.NumberColumn(format="%.2fx"),
-        "RSI": st.column_config.NumberColumn(format="%.1f"),
-        "ADX": st.column_config.NumberColumn(format="%.1f"),
-        "CCI": st.column_config.NumberColumn(format="%.1f"),
-        "SMA20": st.column_config.NumberColumn(format="$%.2f"),
-        "SMA50": st.column_config.NumberColumn(format="$%.2f"),
-        "SMA200": st.column_config.NumberColumn(format="$%.2f"),
-        "ATR14": st.column_config.NumberColumn(format="%.2f"),
-        "מרחק מ-SMA20 %": st.column_config.NumberColumn(format="%+.2f%%"),
-        "מרחק מ-SMA50 %": st.column_config.NumberColumn(format="%+.2f%%"),
-        "מרחק מפריצת 20 יום %": st.column_config.NumberColumn(format="%+.2f%%"),
-        "מרחק מפריצת 50 יום %": st.column_config.NumberColumn(format="%+.2f%%"),
-        "נקודת כניסה": st.column_config.NumberColumn(format="$%.2f"),
-        "יעד ראשון": st.column_config.NumberColumn(format="$%.2f"),
-        "יעד שני": st.column_config.NumberColumn(format="$%.2f"),
-        "הסתברות יעד ראשון %": st.column_config.ProgressColumn(
-            "הסתברות יעד ראשון %",
-            min_value=0,
-            max_value=100,
-            format="%d%%",
-            width="small",
-        ),
-        "הסתברות יעד שני %": st.column_config.ProgressColumn(
-            "הסתברות יעד שני %",
-            min_value=0,
-            max_value=100,
-            format="%d%%",
-            width="small",
-        ),
-    }
-
-
 def _render_professional_table_filters(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
     if df.empty:
         return df, 80
@@ -1503,6 +1702,10 @@ def _multiselect_existing(container, df: pd.DataFrame, column: str, label: str, 
 
 
 def _render_dark_professional_table(df: pd.DataFrame, limit: int = 80) -> None:
+    if df.empty:
+        st.warning("אין שורות להצגה בטבלה.")
+        return
+
     cols = [
         "סימבול", "סקטור", "מחיר אחרון", "שינוי %", "ווליום יחסי", "דפוס",
         "רמה", "ציון", "עוצמת מהלך", "מוסדי", "תג מוסדי",
@@ -1542,11 +1745,13 @@ def _render_dark_professional_table(df: pd.DataFrame, limit: int = 80) -> None:
     body = "".join(rows_html)
     st.markdown(
         f"""
-        <div class="pro-table-wrap">
-            <table class="pro-table">
-                <thead><tr>{header}</tr></thead>
-                <tbody>{body}</tbody>
-            </table>
+        <div class="pro-table-outer">
+            <div class="pro-table-wrap">
+                <table class="pro-table">
+                    <thead><tr>{header}</tr></thead>
+                    <tbody>{body}</tbody>
+                </table>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,

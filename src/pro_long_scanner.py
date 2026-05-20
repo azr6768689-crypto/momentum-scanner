@@ -9,6 +9,7 @@ trend, breakout proximity, volume behavior, volatility compression, and risk.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -251,7 +252,8 @@ def build_professional_long_rows(
             "הערת סיכון": setup.risk_note,
             "מה לחכות": setup.wait_for,
         })
-    _apply_strategy_backtest_aggregates(rows)
+    if os.getenv("SCAN_SKIP_BACKTEST", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        _apply_strategy_backtest_aggregates(rows)
     return rows
 
 
@@ -406,6 +408,8 @@ def _analyze_ticker(
     reclaim_50 = _reclaim_sma50_candidate(df, snap)
     breakout_52w = _fifty_two_week_breakout_candidate(snap)
     volume_dry_up = _volume_dry_up_candidate(df, snap)
+    fast_scan = os.getenv("SCAN_SKIP_BACKTEST", "").strip().lower() in {"1", "true", "yes", "on"}
+    skip_weekly = os.getenv("SCAN_SKIP_WEEKLY_SPARKLINES", "").strip().lower() in {"1", "true", "yes", "on"}
     technicals = _technical_state(df)
 
     score = 0
@@ -499,7 +503,16 @@ def _analyze_ticker(
         volume_dry_up,
     )
     breakout_status = _breakout_status(snap)
-    backtest = _strategy_backtest(df, pattern)
+    if os.getenv("SCAN_SKIP_BACKTEST", "").strip().lower() in {"1", "true", "yes", "on"}:
+        backtest = {
+            "success_rate": None,
+            "sample_size": 0,
+            "avg_forward_return": None,
+            "score_adjust": 0,
+            "note": "Backtest מקומי דולג במצב סריקה מהירה.",
+        }
+    else:
+        backtest = _strategy_backtest(df, pattern)
     if backtest["score_adjust"]:
         score += int(backtest["score_adjust"])
         reasons.append(str(backtest["note"]))
@@ -572,9 +585,9 @@ def _analyze_ticker(
         time_to_targets=trade_plan["time_to_targets"],
         risk_note=_risk_note(score, extended, snap.rvol_20),
         wait_for=f"לחכות לפריצה מעל ${entry:.2f} עם ווליום יחסי מעל 1.5x ונר שסוגר חזק.",
-        sparkline=_daily_sparkline(df),
-        daily_sparkline=_daily_sparkline(df),
-        weekly_sparkline=_weekly_sparkline(df),
+        sparkline=_daily_sparkline(df, bars=40 if fast_scan else 80),
+        daily_sparkline=_daily_sparkline(df, bars=40 if fast_scan else 80),
+        weekly_sparkline="[]" if (fast_scan and skip_weekly) else _weekly_sparkline(df),
         hourly_sparkline="[]",
     )
 
@@ -1262,8 +1275,8 @@ def _target_plan(
     }
 
 
-def _daily_sparkline(df: pd.DataFrame) -> str:
-    values = df["close"].tail(80).round(2).tolist()
+def _daily_sparkline(df: pd.DataFrame, bars: int = 80) -> str:
+    values = df["close"].tail(max(10, bars)).round(2).tolist()
     return json.dumps(values)
 
 

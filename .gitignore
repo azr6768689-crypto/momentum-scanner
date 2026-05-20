@@ -45,6 +45,11 @@ ENV/
 
 # --- Deploy bundles (generated locally) --------------------------------------
 hf_space_upload/
+colab_upload_staging/
+momentum_colab_upload.zip
+momentum_scanner_hf.zip
+momentum_system/
+*.zip
 
 # --- Project-specific --------------------------------------------------------
 # Local market-data cache (large, regeneratable)

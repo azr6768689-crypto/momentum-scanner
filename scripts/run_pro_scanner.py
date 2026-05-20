@@ -6,9 +6,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -19,6 +22,7 @@ from src.analytics.indicators import compute_snapshot
 from src.config import load_settings, ensure_directories
 from src.data import get_provider
 from src.pro_long_scanner import write_professional_long_report
+from src.scan_profiles import apply_profile_to_env, get_profile
 
 
 def _setup_logging(level: str) -> None:
@@ -45,6 +49,21 @@ def _load_csv_universe(path: Path) -> list[str]:
     tickers = [str(t).upper().strip() for t in df[symbol_col].dropna()]
     seen: set[str] = set()
     return [t for t in tickers if t and not (t in seen or seen.add(t))]
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _default_workers() -> int:
+    explicit = os.getenv("SCAN_WORKERS", "").strip()
+    if explicit.isdigit() and int(explicit) > 0:
+        return int(explicit)
+    cpu = os.cpu_count() or 4
+    return min(32, max(8, cpu * 2))
 
 
 def _load_sector_map(path: Path) -> dict[str, str]:
@@ -159,15 +178,110 @@ def _attach_news(report: pd.DataFrame, provider, top_n: int, log: logging.Logger
     return report
 
 
+def _fetch_symbol(
+    ticker: str,
+    provider,
+    start: date,
+    end: date,
+    *,
+    trim_bars: int | None,
+) -> tuple[str, pd.DataFrame | None, Any | None]:
+    try:
+        df = provider.get_daily_bars(ticker, start, end)
+    except Exception:
+        return ticker, None, None
+    if df is None or df.empty:
+        return ticker, None, None
+    if trim_bars and len(df) > trim_bars:
+        df = df.tail(trim_bars).copy()
+    snap = compute_snapshot(df)
+    if snap is None:
+        return ticker, None, None
+    return ticker, df, snap
+
+
+def _load_universe_parallel(
+    fetch_tickers: list[str],
+    provider,
+    start: date,
+    end: date,
+    workers: int,
+    trim_bars: int | None,
+    log: logging.Logger,
+) -> tuple[dict[str, pd.DataFrame], dict[str, Any]]:
+    universe: dict[str, pd.DataFrame] = {}
+    snapshots: dict[str, Any] = {}
+    total = len(fetch_tickers)
+    done = 0
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(_fetch_symbol, ticker, provider, start, end, trim_bars=trim_bars): ticker
+            for ticker in fetch_tickers
+        }
+        for future in as_completed(futures):
+            ticker, df, snap = future.result()
+            done += 1
+            if df is not None and snap is not None:
+                universe[ticker] = df
+                snapshots[ticker] = snap
+            if done % 100 == 0 or done == total:
+                log.info("Loaded %d/%d symbols (%d usable)", done, total, len(snapshots))
+    return universe, snapshots
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Professional Hebrew long-only scanner")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--universe-csv", type=Path, default=None, help="CSV with a symbol column")
     parser.add_argument("--output-suffix", type=str, default="", help="Optional suffix before _report.csv")
     parser.add_argument("--sector-map", type=Path, default=ROOT / "data" / "universe" / "sector_map.csv")
-    parser.add_argument("--intraday-top", type=int, default=50, help="Fetch hourly charts for top N ranked symbols")
-    parser.add_argument("--news-top", type=int, default=100, help="Fetch Polygon news for top N ranked symbols")
+    parser.add_argument("--intraday-top", type=int, default=None, help="Fetch hourly charts for top N ranked symbols")
+    parser.add_argument("--news-top", type=int, default=None, help="Fetch Polygon news for top N ranked symbols")
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        default=None,
+        help="Parallel load + skip heavy per-ticker backtest (recommended)",
+    )
+    parser.add_argument(
+        "--enriched",
+        action="store_true",
+        help="After scan: hourly charts (50) + news (100) — adds ~30-60s",
+    )
+    parser.add_argument("--workers", type=int, default=None, help="Parallel loader threads (default: auto)")
+    parser.add_argument(
+        "--profile",
+        choices=["simple", "medium", "full"],
+        default=None,
+        help="Scan depth: simple (fast) | medium (balanced) | full (deepest)",
+    )
     args = parser.parse_args()
+
+    profile = None
+    if args.profile or os.getenv("SCAN_PROFILE"):
+        profile = get_profile(args.profile)
+        apply_profile_to_env(profile)
+        fast = profile.fast_parallel
+        args.intraday_top = profile.intraday_top if args.intraday_top is None else args.intraday_top
+        args.news_top = profile.news_top if args.news_top is None else args.news_top
+        trim_bars = profile.trim_bars
+        if not args.output_suffix:
+            args.output_suffix = profile.output_suffix
+    else:
+        fast = args.fast if args.fast is not None else _env_bool("SCAN_FAST", True)
+        enriched = args.enriched or _env_bool("SCAN_ENRICHED", False)
+        if args.intraday_top is None:
+            args.intraday_top = 50 if enriched else 0
+        if args.news_top is None:
+            args.news_top = 100 if enriched else 0
+        trim_bars = 320 if fast else None
+        if fast:
+            os.environ["SCAN_SKIP_BACKTEST"] = "1"
+        trim_env = os.getenv("SCAN_TRIM_BARS", "").strip()
+        if trim_env.isdigit():
+            trim_bars = int(trim_env)
+
+    workers = args.workers or _default_workers()
 
     settings = load_settings()
     ensure_directories(settings)
@@ -190,22 +304,20 @@ def main() -> int:
         if benchmark not in fetch_tickers:
             fetch_tickers.append(benchmark)
 
-    log.info("Starting professional scanner: provider=%s universe=%d", settings.provider, len(tickers))
-    for idx, ticker in enumerate(fetch_tickers, start=1):
-        try:
-            df = provider.get_daily_bars(ticker, start, end)
-        except Exception as exc:
-            log.warning("Failed to fetch %s: %s", ticker, exc)
-            continue
-        if df.empty:
-            continue
-        snap = compute_snapshot(df)
-        if snap is None:
-            continue
-        universe[ticker] = df
-        snapshots[ticker] = snap
-        if idx % 10 == 0 or idx == len(fetch_tickers):
-            log.info("Fetched %d/%d symbols (%d usable)", idx, len(fetch_tickers), len(snapshots))
+    profile_id = profile.id if profile else ("fast" if fast else "legacy")
+    log.info(
+        "Starting professional scanner: provider=%s universe=%d profile=%s workers=%d "
+        "intraday=%d news=%d",
+        settings.provider,
+        len(tickers),
+        profile_id,
+        workers,
+        args.intraday_top,
+        args.news_top,
+    )
+    universe, snapshots = _load_universe_parallel(
+        fetch_tickers, provider, start, end, workers, trim_bars, log
+    )
 
     filename = settings.reporting.csv_filename_format.format(date=end.isoformat())
     if args.output_suffix:
@@ -217,7 +329,11 @@ def main() -> int:
     report = _attach_news(report, provider, args.news_top, log)
     report.to_csv(out, index=False, encoding="utf-8")
 
-    print(f"scanner_status=ok")
+    print("scanner_status=ok")
+    print(f"scan_profile={profile_id}")
+    print(f"workers={workers}")
+    print(f"intraday_top={args.intraday_top}")
+    print(f"news_top={args.news_top}")
     print(f"provider={settings.provider}")
     print(f"symbols_requested={len(tickers)}")
     print(f"symbols_with_usable_data={len(snapshots)}")

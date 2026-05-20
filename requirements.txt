@@ -39,7 +39,7 @@ loguru>=0.7,<1.0           # Structured logging that's nicer than stdlib
 # --- Indicators --------------------------------------------------------------
 # We deliberately DO NOT use TA-Lib (painful to install on macOS).
 # pandas_ta covers what we need and installs cleanly via pip.
-pandas-ta>=0.3.14b,<0.4
+pandas-ta>=0.3.14b
 
 # --- Testing -----------------------------------------------------------------
 pytest>=7.4,<9.0

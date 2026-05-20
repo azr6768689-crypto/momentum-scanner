@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-USER="${GITHUB_USER:-}"
+USER="${GITHUB_USER:-azr6768689-crypto}"
 REPO="${GITHUB_REPO:-momentum-scanner}"
 TOKEN="${GITHUB_TOKEN:-}"
 
