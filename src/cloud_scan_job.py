@@ -16,6 +16,7 @@ PID_PATH = ROOT / "data" / "reports" / ".scan_job.pid"
 LOG_PATH = ROOT / "data" / "reports" / ".scan_job.log"
 RUNNER = ROOT / "scripts" / "cloud_scan_runner.py"
 
+from src.report_persistence import load_last_report, save_last_report
 from src.scan_progress import clear_progress, read_progress, write_progress
 
 _STALE_ZERO_PROGRESS_SEC = 300
@@ -71,6 +72,21 @@ def _read_status() -> dict:
                         os.kill(pid, signal.SIGTERM)
                     except OSError:
                         pass
+    elif data.get("state") == "ok" and data.get("report_file"):
+        save_last_report(str(data["report_file"]), str(data.get("profile", "")))
+    elif data.get("state") in ("error", "idle"):
+        saved = load_last_report()
+        if saved.get("report_file"):
+            report_name = str(saved["report_file"])
+            report_path = STATUS_PATH.parent / report_name
+            if report_path.is_file() and report_path.stat().st_size > 0:
+                data = {
+                    "state": "ok",
+                    "profile": saved.get("profile", ""),
+                    "report_file": report_name,
+                    "message": "דוח מהסריקה האחרונה (שמור)",
+                }
+                _write_status(data)
     return data
 
 

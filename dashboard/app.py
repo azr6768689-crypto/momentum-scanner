@@ -42,6 +42,7 @@ sys.path.insert(0, str(ROOT))
 from src.env_secrets import clean_env_secret
 from src.report_compare import attach_rank_delta
 from src.report_paths import is_official_report_csv
+from src.report_persistence import last_report_path, load_last_report, save_last_report
 
 # Path constants
 REPORTS_DIR = ROOT / "data" / "reports"
@@ -272,11 +273,27 @@ def _default_scan_profile_id() -> str:
     return default_profile
 
 
+def _restore_persisted_scan_prefs() -> None:
+    """Load last report from disk so a new login/session still shows the previous scan."""
+    meta = load_last_report()
+    if not meta:
+        latest = find_latest_report()
+        if latest:
+            meta = {"report_file": latest.name, "profile": ""}
+    if meta.get("report_file"):
+        st.session_state.setdefault("last_scan_report_file", meta["report_file"])
+    if meta.get("profile"):
+        st.session_state.setdefault("last_scan_profile", meta["profile"])
+    st.session_state["auto_scan_on_entry_done"] = True
+
+
 def _handle_cloud_scan_lifecycle() -> None:
-    """Auto-scan, polling, and report reload — always active (not tied to panel visibility)."""
+    """Reload UI after scan completes — never auto-start scan on entry by default."""
     if not _is_cloud_space():
         return
-    _maybe_auto_scan_on_entry(_default_scan_profile_id())
+    _restore_persisted_scan_prefs()
+    if _auto_scan_on_entry_enabled():
+        _maybe_auto_scan_on_entry(_default_scan_profile_id())
     _maybe_reload_after_scan_ok()
 
 
@@ -354,7 +371,15 @@ def _render_sidebar_scan_hub() -> None:
     if state == "running":
         _scan_status_fragment()
     elif state == "ok":
-        st.success("מוכן — בחר דוח למטה")
+        saved = load_last_report()
+        if saved.get("report_file"):
+            st.success(f"דוח שמור: {saved['report_file']}")
+        else:
+            st.success("הסריקה הושלמה")
+    elif state == "idle":
+        saved = load_last_report()
+        if saved.get("report_file") and _cloud_scan_state() != "running":
+            st.info(f"דוח אחרון: **{saved['report_file']}** · לחץ ▶ הרץ לסריקה חדשה")
     elif state == "error":
         job = get_status()
         st.error(str(job.get("message", "שגיאה"))[:300])
@@ -411,6 +436,7 @@ def _render_sidebar_scan_hub() -> None:
     if job.get("state") == "ok" and job.get("report_file"):
         st.session_state["last_scan_report_file"] = job["report_file"]
         st.session_state["last_scan_profile"] = job.get("profile", selected_id)
+        save_last_report(str(job["report_file"]), str(job.get("profile", selected_id)))
 
     st.divider()
 
@@ -590,7 +616,6 @@ def _require_dashboard_password() -> None:
             password.encode("utf-8"),
         ):
             st.session_state["dashboard_authenticated"] = True
-            st.session_state.pop("auto_scan_on_entry_done", None)
             _rerun_app()
         else:
             st.error(
@@ -1823,9 +1848,9 @@ def _report_path_from_job() -> Path | None:
 def _discover_report_paths() -> list[Path]:
     """Official reports plus any job-indicated file not yet in the official list."""
     reports = list_all_reports()
-    extra = _report_path_from_job()
-    if extra and extra not in reports:
-        reports = [extra] + reports
+    for extra in (last_report_path(), _report_path_from_job()):
+        if extra and extra not in reports:
+            reports = [extra] + reports
     return reports
 
 
@@ -1844,6 +1869,7 @@ def _maybe_reload_after_scan_ok() -> None:
         return
     st.session_state["scan_ok_reloaded_for"] = rid
     st.session_state["last_scan_report_file"] = job["report_file"]
+    save_last_report(str(job["report_file"]), str(job.get("profile", "")))
     st.cache_data.clear()
     if _cloud_scan_state() != "running":
         _rerun_app()
@@ -1989,7 +2015,9 @@ def report_display_label(path: Path) -> str:
 
 
 def _default_report_index(reports: list[Path], labels: list[str]) -> int:
-    preferred = st.session_state.get("last_scan_report_file", "")
+    preferred = st.session_state.get("last_scan_report_file", "") or str(
+        (load_last_report().get("report_file") or "")
+    )
     if preferred:
         for idx, path in enumerate(reports):
             if path.name == preferred:
@@ -2328,6 +2356,12 @@ def main() -> None:
                 csv_path.stat().st_size / 1024,
                 mtime.strftime("%d/%m/%Y %H:%M:%S"),
             )
+
+    if csv_path is None:
+        fallback = last_report_path() or find_latest_report()
+        if fallback and fallback.is_file():
+            csv_path = fallback
+            st.session_state["last_scan_report_file"] = fallback.name
 
     if csv_path is None:
         st.markdown("### אין דוח להצגה עדיין")

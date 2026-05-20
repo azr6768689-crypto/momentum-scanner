@@ -37,6 +37,6 @@ services:
       - key: RUN_SCAN_ON_STARTUP
         value: "false"
       - key: AUTO_SCAN_ON_ENTRY
-        value: "true"
+        value: "false"
       - key: DASHBOARD_PASSWORD
         sync: false

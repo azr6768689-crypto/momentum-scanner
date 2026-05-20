@@ -13,6 +13,7 @@ STATUS = ROOT / "data" / "reports" / ".scan_job.json"
 LOG_PATH = ROOT / "data" / "reports" / ".scan_job.log"
 sys.path.insert(0, str(ROOT))
 
+from src.report_persistence import save_last_report
 from src.scan_profiles import apply_profile_to_env, get_profile
 from src.scan_progress import write_progress
 from src.scan_runtime import build_scan_subprocess_env
@@ -138,6 +139,8 @@ def main() -> int:
             ),
             encoding="utf-8",
         )
+        if report:
+            save_last_report(report, profile_id)
         return 0
 
     STATUS.write_text(
