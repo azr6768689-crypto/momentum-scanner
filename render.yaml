@@ -24,7 +24,9 @@ services:
       - key: SCANNER_NEWS_TOP
         value: "100"
       - key: SCAN_WORKERS
-        value: "6"
+        value: "2"
+      - key: SCAN_TIMEOUT_SECONDS
+        value: "7200"
       - key: ENABLE_DASHBOARD_SCAN_BUTTON
         value: "true"
       - key: RUN_SCAN_ON_STARTUP

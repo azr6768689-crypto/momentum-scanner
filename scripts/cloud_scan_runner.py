@@ -60,17 +60,28 @@ def main() -> int:
         env["SCAN_WORKERS"],
     ]
     try:
+        timeout_override = os.getenv("SCAN_TIMEOUT_SECONDS", "").strip()
+        if timeout_override.isdigit():
+            scan_timeout = int(timeout_override)
+        else:
+            scan_timeout = max(profile.timeout_seconds + 120, 3600)
         proc = subprocess.run(
             cmd,
             cwd=str(ROOT),
             capture_output=True,
             text=True,
-            timeout=max(profile.timeout_seconds + 120, 3600),
+            timeout=scan_timeout,
             env=env,
         )
     except subprocess.TimeoutExpired:
         STATUS.write_text(
-            json.dumps({"state": "error", "message": "timeout"}, ensure_ascii=False),
+            json.dumps(
+                {
+                    "state": "error",
+                    "message": f"timeout אחרי {scan_timeout} שניות — נסה רמת simple או SCAN_WORKERS=2",
+                },
+                ensure_ascii=False,
+            ),
             encoding="utf-8",
         )
         return 1

@@ -45,8 +45,16 @@ from src.report_paths import is_official_report_csv
 # Path constants
 REPORTS_DIR = ROOT / "data" / "reports"
 
-# Hugging Face: full scan runs on the server (user only needs a browser).
-CLOUD_SCAN_WORKERS = 6
+# Cloud scan parallelism (Render Free: use 2 in render.yaml to avoid OOM).
+def _cloud_scan_workers() -> int:
+    raw = os.getenv("SCAN_WORKERS", "6").strip()
+    try:
+        return max(1, min(int(raw), 12))
+    except ValueError:
+        return 6
+
+
+CLOUD_SCAN_WORKERS = _cloud_scan_workers()
 
 BRAND_HE = "סורק הזהב"
 BRAND_EN = "Golden Scanner"
@@ -1919,7 +1927,17 @@ def _render_cloud_scan_progress() -> None:
     if state == "ok":
         st.success(f"הושלם · כיסוי דאטה {job.get('coverage_pct', '—')}%")
     elif state == "error":
-        st.error(str(job.get("message", "שגיאה")))
+        msg = str(job.get("message", "שגיאה"))
+        st.error(msg)
+        log_tail = str(job.get("log", "") or "").strip()
+        if log_tail:
+            with st.expander("פרטי שגיאה (לוג)", expanded=True):
+                st.code(log_tail[-4000:])
+        if os.getenv("RENDER", "").lower() == "true":
+            st.caption(
+                "Render Free: השאר את הטאב פתוח בזמן סריקה (~20 דק). "
+                "ב-Logs של Render חפש Killed/OOM. ודא POLYGON_API_KEY ב-Environment."
+            )
 
 
 def _render_institutional_scanner_header(
@@ -2227,8 +2245,9 @@ def main() -> None:
     if csv_path is None:
         st.markdown("### אין דוח להצגה עדיין")
         st.info(
-            "**בענן (Hugging Face):** לחץ בסרגל **▶ הרץ סריקה חדשה** והמתן. "
-            "אם הסריקה נכשלת — העלה קובץ דוח מ-Mac לתיקייה `data/reports/` ב-Files."
+            "**בענן (Render / Hugging Face):** בסרגל **▶ סריקה** — בחר **פשוטה**, לחץ סריקה "
+            "והמתן **15–30 דק** (השאר את הדף פתוח). "
+            "אם נכשל: Render → **Environment** → `POLYGON_API_KEY`; ב-Logs חפש Killed/OOM."
         )
         st.caption(f"תיקיית דוחות: `{REPORTS_DIR}`")
         return
