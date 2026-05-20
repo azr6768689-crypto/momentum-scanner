@@ -37,9 +37,10 @@ rich>=13.0,<15.0           # Pretty terminal output
 loguru>=0.7,<1.0           # Structured logging that's nicer than stdlib
 
 # --- Indicators --------------------------------------------------------------
-# We deliberately DO NOT use TA-Lib (painful to install on macOS).
-# pandas_ta covers what we need and installs cleanly via pip.
-pandas-ta>=0.3.14b
+# Core scanner uses pure pandas/numpy in src/analytics/indicators.py (no pandas-ta).
+# PyPI no longer serves old pandas-ta builds for Python 3.11; newer pandas-ta requires Python >=3.12
+# and heavy transitive deps. Removed from default requirements so cloud builds (e.g. Render) succeed.
+# For notebooks experiments: pip install "pandas-ta" yourself if needed.
 
 # --- Testing -----------------------------------------------------------------
 pytest>=7.4,<9.0
