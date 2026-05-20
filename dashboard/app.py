@@ -181,6 +181,20 @@ def _rerun_app() -> None:
         st.experimental_rerun()
 
 
+def _ensure_scan_panel_state() -> None:
+    if "scan_panel_open" not in st.session_state:
+        was_collapsed = bool(st.session_state.pop("scan_sidebar_collapsed", False))
+        st.session_state["scan_panel_open"] = not was_collapsed
+
+
+def _open_scan_panel() -> None:
+    st.session_state["scan_panel_open"] = True
+
+
+def _close_scan_panel() -> None:
+    st.session_state["scan_panel_open"] = False
+
+
 def _render_sidebar_brand() -> None:
     st.markdown(
         f"""
@@ -731,6 +745,34 @@ st.markdown(
     [data-testid="stSidebar"] [data-testid="stExpander"] summary {
         color: #e2e8f0 !important;
         font-weight: 750 !important;
+    }
+    [data-testid="stSidebar"] .scan-panel-toggle-open + div .stButton > button {
+        background: linear-gradient(135deg, #2563eb, #06b6d4) !important;
+        border: 1px solid rgba(147, 197, 253, 0.65) !important;
+        color: #ffffff !important;
+        font-weight: 850 !important;
+        min-height: 2.75rem !important;
+        box-shadow: 0 8px 22px rgba(37, 99, 235, 0.35) !important;
+    }
+    [data-testid="stSidebar"] .scan-panel-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 8px 10px;
+        margin: 0 0 10px;
+        border-radius: 12px;
+        border: 1px solid rgba(96, 165, 250, 0.45);
+        background: linear-gradient(135deg, rgba(37, 99, 235, 0.35), rgba(6, 182, 212, 0.22));
+        color: #e0f2fe;
+        font-weight: 850;
+    }
+    [data-testid="stSidebar"] .scan-panel-close + div .stButton > button {
+        min-width: 2.2rem !important;
+        padding: 0.2rem 0.45rem !important;
+        border-color: rgba(248, 113, 113, 0.55) !important;
+        color: #fecaca !important;
+        background: rgba(127, 29, 29, 0.35) !important;
     }
     [data-testid="stSidebar"] .stSlider [data-baseweb="slider"] > div > div {
         background: linear-gradient(90deg, #2563eb, #06b6d4) !important;
@@ -2123,67 +2165,92 @@ def render_signal_card(row: pd.Series) -> None:
 
 
 def _render_scan_sidebar_panel() -> None:
-    """Scan controls in the sidebar — native expander for reliable open/close."""
-    with st.expander("סריקה", expanded=True):
-        from src.scan_profiles import list_profiles
-
-        profiles = list_profiles()
-        profile_labels = {p.id: p.label_he for p in profiles}
-        default_profile = os.getenv("SCAN_PROFILE", "simple")
-        if default_profile not in profile_labels:
-            default_profile = "simple"
-        profile_ids = [p.id for p in profiles]
-        selected_profile = _sidebar_selector(
-            "רמת סריקה",
-            profile_ids,
-            index=profile_ids.index(default_profile),
-            key="scan_profile_select",
-            format_func=lambda pid: profile_labels[pid],
-        )
-        selected = next(p for p in profiles if p.id == selected_profile)
-
-        cloud = _is_cloud_space()
-        from src.cloud_scan_job import get_status, start_full_scan
-
-        _maybe_auto_scan_on_entry(selected_profile)
-        _render_cloud_scan_progress()
-        job = get_status()
-        if cloud and job.get("state") == "running" and hasattr(st, "autorefresh"):
-            st.autorefresh(interval=20_000, key="cloud_scan_progress_poll")
-
-        scan_clicked = st.button(
-            f"▶ סריקה — {selected.label_he}",
+    """Scan controls — prominent open/close toggle in the sidebar."""
+    _ensure_scan_panel_state()
+    if not st.session_state.get("scan_panel_open", True):
+        st.markdown('<div class="scan-panel-toggle-open"></div>', unsafe_allow_html=True)
+        st.button(
+            "▶ פתח סריקה",
             use_container_width=True,
             type="primary",
+            key="scan_panel_open_btn",
+            on_click=_open_scan_panel,
         )
-        if scan_clicked:
-            if _is_cloud_space():
-                ok_pf, pf_msg = _preflight_polygon_key_cached()
-                if not ok_pf:
-                    st.error(pf_msg)
-                else:
-                    started, _msg = start_full_scan(selected_profile)
-                    if started:
-                        st.session_state["last_scan_profile"] = selected_profile
-                        st.session_state.pop("_polygon_preflight_cache", None)
-                        _rerun_app()
-            else:
-                with st.spinner("סורק…"):
-                    ok, output = run_professional_scan_from_dashboard(selected_profile)
-                st.cache_data.clear()
-                if ok:
-                    for line in output.splitlines():
-                        if line.startswith("report_file="):
-                            st.session_state["last_scan_report_file"] = line.split("=", 1)[-1].strip()
-                    st.session_state["last_scan_profile"] = selected_profile
-                    _rerun_app()
-                else:
-                    st.error("הסריקה נכשלה.")
+        return
 
-        job = get_status()
-        if job.get("state") == "ok" and job.get("report_file"):
-            st.session_state["last_scan_report_file"] = job["report_file"]
-            st.session_state["last_scan_profile"] = job.get("profile", selected_profile)
+    st.markdown(
+        '<div class="scan-panel-head"><span>🔎 סריקה · פתוח</span></div>',
+        unsafe_allow_html=True,
+    )
+    close_col, _ = st.columns([1, 5])
+    with close_col:
+        st.markdown('<div class="scan-panel-close"></div>', unsafe_allow_html=True)
+        st.button(
+            "✕ סגור",
+            key="scan_panel_close_btn",
+            on_click=_close_scan_panel,
+            use_container_width=True,
+        )
+
+    from src.scan_profiles import list_profiles
+
+    profiles = list_profiles()
+    profile_labels = {p.id: p.label_he for p in profiles}
+    default_profile = os.getenv("SCAN_PROFILE", "simple")
+    if default_profile not in profile_labels:
+        default_profile = "simple"
+    profile_ids = [p.id for p in profiles]
+    selected_profile = _sidebar_selector(
+        "רמת סריקה",
+        profile_ids,
+        index=profile_ids.index(default_profile),
+        key="scan_profile_select",
+        format_func=lambda pid: profile_labels[pid],
+    )
+    selected = next(p for p in profiles if p.id == selected_profile)
+
+    cloud = _is_cloud_space()
+    from src.cloud_scan_job import get_status, start_full_scan
+
+    _maybe_auto_scan_on_entry(selected_profile)
+    _render_cloud_scan_progress()
+    job = get_status()
+    if cloud and job.get("state") == "running" and hasattr(st, "autorefresh"):
+        st.autorefresh(interval=20_000, key="cloud_scan_progress_poll")
+
+    scan_clicked = st.button(
+        f"▶ סריקה — {selected.label_he}",
+        use_container_width=True,
+        type="primary",
+    )
+    if scan_clicked:
+        if _is_cloud_space():
+            ok_pf, pf_msg = _preflight_polygon_key_cached()
+            if not ok_pf:
+                st.error(pf_msg)
+            else:
+                started, _msg = start_full_scan(selected_profile)
+                if started:
+                    st.session_state["last_scan_profile"] = selected_profile
+                    st.session_state.pop("_polygon_preflight_cache", None)
+                    _rerun_app()
+        else:
+            with st.spinner("סורק…"):
+                ok, output = run_professional_scan_from_dashboard(selected_profile)
+            st.cache_data.clear()
+            if ok:
+                for line in output.splitlines():
+                    if line.startswith("report_file="):
+                        st.session_state["last_scan_report_file"] = line.split("=", 1)[-1].strip()
+                st.session_state["last_scan_profile"] = selected_profile
+                _rerun_app()
+            else:
+                st.error("הסריקה נכשלה.")
+
+    job = get_status()
+    if job.get("state") == "ok" and job.get("report_file"):
+        st.session_state["last_scan_report_file"] = job["report_file"]
+        st.session_state["last_scan_profile"] = job.get("profile", selected_profile)
 
 
 # =============================================================================
