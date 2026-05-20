@@ -42,21 +42,39 @@ def main() -> int:
     repo_id = f"{username}/{space_name}"
     api = HfApi(token=token)
 
-    print(f"יוצר Space (אם חסר): {repo_id}")
-    api.create_repo(
-        repo_id=repo_id,
-        repo_type="space",
-        space_sdk="streamlit",
-        private=True,
-        exist_ok=True,
-    )
+    try:
+        api.repo_info(repo_id=repo_id, repo_type="space")
+        print(f"Space קיים: {repo_id}")
+    except Exception:
+        print(f"יוצר Space: {repo_id}")
+        api.create_repo(
+            repo_id=repo_id,
+            repo_type="space",
+            space_sdk="docker",
+            private=True,
+            exist_ok=True,
+        )
+
+    # מחיקת תיקייה ישנה בשם שגוי (אם הועלתה בעבר)
+    for stale in (
+        "dashboard_UPLOAD/app.py",
+        "dashboard_UPLOAD/קרא_אותי.txt",
+    ):
+        try:
+            api.delete_file(path_in_repo=stale, repo_id=repo_id, repo_type="space")
+            print(f"נמחק מ-Space: {stale}")
+        except Exception:
+            pass
 
     print("מעלה קבצים... (יכול לקחת כמה דקות)")
     api.upload_folder(
         folder_path=str(UPLOAD_DIR),
         repo_id=repo_id,
         repo_type="space",
-        commit_message="Upload momentum scanner",
+        commit_message=os.getenv(
+            "HF_COMMIT_MESSAGE",
+            "Dashboard: scan ETA table + Google Finance & TradingView assistant links",
+        ),
     )
 
     url = f"https://huggingface.co/spaces/{repo_id}"
@@ -64,8 +82,10 @@ def main() -> int:
     print("הועלה בהצלחה.")
     print(f"פתח: {url}")
     print("")
-    print("עכשיו ב-Settings → Secrets הוסף:")
+    print("עכשיו ב-Settings → Secrets הוסף (או הרץ push_hf_from_desktop.sh עם .env):")
     print("  POLYGON_API_KEY, DASHBOARD_PASSWORD, DATA_PROVIDER=polygon")
+    print("  AUTO_SCAN_ON_ENTRY=true   # סריקה אוטומטית בכל כניסה (ברירת מחדל)")
+    print("  RUN_SCAN_ON_STARTUP=false")
     return 0
 
 

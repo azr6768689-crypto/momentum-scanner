@@ -21,10 +21,23 @@ copy "$ROOT/dashboard" "dashboard"
 copy "$ROOT/src" "src"
 copy "$ROOT/config" "config"
 copy "$ROOT/scripts/run_pro_scanner.py" "scripts/run_pro_scanner.py"
+copy "$ROOT/scripts/cloud_scan_runner.py" "scripts/cloud_scan_runner.py"
+copy "$ROOT/DEPLOY_VERSION.txt" "DEPLOY_VERSION.txt"
 copy "$ROOT/data/universe/polygon_liquid_us.csv" "data/universe/polygon_liquid_us.csv"
 copy "$ROOT/data/universe/sector_map.csv" "data/universe/sector_map.csv"
 mkdir -p "$OUT/data/reports"
-touch "$OUT/data/reports/.gitkeep"
+REPORT_COUNT=0
+for suffix in us_simple us_medium us_full; do
+  LATEST="$(ls -t "$ROOT/data/reports/"*_"${suffix}"_report.csv 2>/dev/null | head -1)"
+  if [[ -n "$LATEST" && -f "$LATEST" ]]; then
+    cp "$LATEST" "$OUT/data/reports/"
+    echo "דוח נוסף: $(basename "$LATEST")"
+    REPORT_COUNT=$((REPORT_COUNT + 1))
+  fi
+done
+if [[ "$REPORT_COUNT" -eq 0 ]]; then
+  touch "$OUT/data/reports/.gitkeep"
+fi
 
 cp "$ROOT/README_HF.md" "$OUT/README.md"
 

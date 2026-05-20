@@ -179,7 +179,7 @@ def build_professional_long_rows(
         )
         for t in tickers
     ]
-    setups.sort(key=lambda setup: (setup.institutional_score, setup.probability, setup.ticker), reverse=True)
+    setups.sort(key=lambda setup: (setup.probability, setup.institutional_score, setup.ticker), reverse=True)
 
     rows: list[dict[str, Any]] = []
     for rank, setup in enumerate(setups, start=1):
@@ -408,8 +408,11 @@ def _analyze_ticker(
     reclaim_50 = _reclaim_sma50_candidate(df, snap)
     breakout_52w = _fifty_two_week_breakout_candidate(snap)
     volume_dry_up = _volume_dry_up_candidate(df, snap)
-    fast_scan = os.getenv("SCAN_SKIP_BACKTEST", "").strip().lower() in {"1", "true", "yes", "on"}
-    skip_weekly = os.getenv("SCAN_SKIP_WEEKLY_SPARKLINES", "").strip().lower() in {"1", "true", "yes", "on"}
+    def _env_on(name: str) -> bool:
+        return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+    compact_charts = _env_on("SCAN_FAST_CHARTS") or _env_on("SCAN_FAST")
+    skip_weekly = _env_on("SCAN_SKIP_WEEKLY_SPARKLINES")
     technicals = _technical_state(df)
 
     score = 0
@@ -585,9 +588,9 @@ def _analyze_ticker(
         time_to_targets=trade_plan["time_to_targets"],
         risk_note=_risk_note(score, extended, snap.rvol_20),
         wait_for=f"לחכות לפריצה מעל ${entry:.2f} עם ווליום יחסי מעל 1.5x ונר שסוגר חזק.",
-        sparkline=_daily_sparkline(df, bars=40 if fast_scan else 80),
-        daily_sparkline=_daily_sparkline(df, bars=40 if fast_scan else 80),
-        weekly_sparkline="[]" if (fast_scan and skip_weekly) else _weekly_sparkline(df),
+        sparkline=_daily_sparkline(df, bars=40 if compact_charts else 80),
+        daily_sparkline=_daily_sparkline(df, bars=40 if compact_charts else 80),
+        weekly_sparkline="[]" if skip_weekly else _weekly_sparkline(df),
         hourly_sparkline="[]",
     )
 
@@ -904,11 +907,13 @@ def _institutional_layer(
 
     if pattern != "אין דפוס פריצה איכותי כרגע":
         score += 10
-    if setup_score >= 90:
+    a_plus_min = _score_threshold("SCAN_A_PLUS_MIN_SCORE", 85)
+    watch_min = _score_threshold("SCAN_WATCHLIST_MIN_SCORE", 70)
+    if setup_score >= a_plus_min:
         score += 12
-    elif setup_score >= 75:
+    elif setup_score >= watch_min:
         score += 8
-    elif setup_score >= 60:
+    elif setup_score >= _score_threshold("SCAN_EARLY_MIN_SCORE", 45):
         score += 4
 
     score = max(0, min(100, score))
@@ -1194,6 +1199,13 @@ def _trend_hebrew(trend: str) -> str:
     }.get(trend, trend)
 
 
+def _score_threshold(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if raw.isdigit():
+        return int(raw)
+    return default
+
+
 def _level(
     score: int,
     actionable_breakout: bool,
@@ -1201,11 +1213,20 @@ def _level(
     has_volume_context: bool,
     extended: bool,
 ) -> str:
-    if score >= 85 and actionable_breakout and has_quality_pattern and has_volume_context and not extended:
+    a_plus_min = _score_threshold("SCAN_A_PLUS_MIN_SCORE", 85)
+    watch_min = _score_threshold("SCAN_WATCHLIST_MIN_SCORE", 70)
+    early_min = _score_threshold("SCAN_EARLY_MIN_SCORE", 45)
+    if (
+        score >= a_plus_min
+        and actionable_breakout
+        and has_quality_pattern
+        and has_volume_context
+        and not extended
+    ):
         return "A+ Setup"
-    if score >= 70 and has_quality_pattern:
+    if score >= watch_min and has_quality_pattern:
         return "Watchlist"
-    if score >= 45:
+    if score >= early_min:
         return "Early Momentum"
     return "לא מעניין כרגע"
 

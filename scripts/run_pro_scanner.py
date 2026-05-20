@@ -22,7 +22,33 @@ from src.analytics.indicators import compute_snapshot
 from src.config import load_settings, ensure_directories
 from src.data import get_provider
 from src.pro_long_scanner import write_professional_long_report
-from src.scan_profiles import apply_profile_to_env, get_profile
+from src.scan_profiles import ScanProfile, apply_profile_to_env, get_profile
+from src.scan_progress import write_progress
+
+
+def _validate_profile_thresholds(
+    report: pd.DataFrame,
+    profile: ScanProfile | None,
+    log: logging.Logger,
+) -> None:
+    if profile is None or "הסתברות %" not in report.columns or "רמה" not in report.columns:
+        return
+    a_plus = report[report["רמה"] == "A+ Setup"]
+    if a_plus.empty:
+        print(f"threshold_violations=0")
+        print(f"a_plus_min_enforced={profile.a_plus_min_score}")
+        return
+    scores = pd.to_numeric(a_plus["הסתברות %"], errors="coerce")
+    violations = int((scores < profile.a_plus_min_score).sum())
+    print(f"threshold_violations={violations}")
+    print(f"a_plus_min_enforced={profile.a_plus_min_score}")
+    if violations:
+        log.error(
+            "Profile %s: %d A+ rows below minimum score %d",
+            profile.id,
+            violations,
+            profile.a_plus_min_score,
+        )
 
 
 def _setup_logging(level: str) -> None:
@@ -62,6 +88,8 @@ def _default_workers() -> int:
     explicit = os.getenv("SCAN_WORKERS", "").strip()
     if explicit.isdigit() and int(explicit) > 0:
         return int(explicit)
+    if os.getenv("SPACE_ID") or os.getenv("SPACE_REPO_NAME"):
+        return 4
     cpu = os.cpu_count() or 4
     return min(32, max(8, cpu * 2))
 
@@ -208,6 +236,10 @@ def _load_universe_parallel(
     workers: int,
     trim_bars: int | None,
     log: logging.Logger,
+    *,
+    universe_size: int,
+    profile_id: str = "",
+    profile_label: str = "",
 ) -> tuple[dict[str, pd.DataFrame], dict[str, Any]]:
     universe: dict[str, pd.DataFrame] = {}
     snapshots: dict[str, Any] = {}
@@ -224,8 +256,25 @@ def _load_universe_parallel(
             if df is not None and snap is not None:
                 universe[ticker] = df
                 snapshots[ticker] = snap
-            if done % 100 == 0 or done == total:
-                log.info("Loaded %d/%d symbols (%d usable)", done, total, len(snapshots))
+            if done % 25 == 0 or done == total:
+                stocks_done = min(done, universe_size)
+                log.info(
+                    "Loaded %d/%d universe stocks (%d usable)",
+                    stocks_done,
+                    universe_size,
+                    len(snapshots),
+                )
+                pct = 5 + int(70 * stocks_done / max(universe_size, 1))
+                label = profile_label or "סריקה"
+                write_progress(
+                    pct,
+                    "טעינת נתונים",
+                    done=stocks_done,
+                    total=universe_size,
+                    message=f"{label}: נטענו {stocks_done:,} מתוך {universe_size:,} מניות",
+                    profile_id=profile_id,
+                    profile_label=profile_label,
+                )
     return universe, snapshots
 
 
@@ -305,6 +354,8 @@ def main() -> int:
             fetch_tickers.append(benchmark)
 
     profile_id = profile.id if profile else ("fast" if fast else "legacy")
+    profile_label = profile.label_he if profile else "סריקה"
+    universe_count = len(tickers)
     log.info(
         "Starting professional scanner: provider=%s universe=%d profile=%s workers=%d "
         "intraday=%d news=%d",
@@ -315,8 +366,36 @@ def main() -> int:
         args.intraday_top,
         args.news_top,
     )
+    write_progress(
+        3,
+        "מתחיל",
+        done=0,
+        total=universe_count,
+        message=f"{profile_label}: מתחיל סריקת {universe_count:,} מניות",
+        profile_id=profile_id,
+        profile_label=profile_label,
+    )
     universe, snapshots = _load_universe_parallel(
-        fetch_tickers, provider, start, end, workers, trim_bars, log
+        fetch_tickers,
+        provider,
+        start,
+        end,
+        workers,
+        trim_bars,
+        log,
+        universe_size=universe_count,
+        profile_id=profile_id,
+        profile_label=profile_label,
+    )
+
+    write_progress(
+        78,
+        "דירוג",
+        done=universe_count,
+        total=universe_count,
+        message=f"{profile_label}: מדרג {universe_count:,} מניות",
+        profile_id=profile_id,
+        profile_label=profile_label,
     )
 
     filename = settings.reporting.csv_filename_format.format(date=end.isoformat())
@@ -324,9 +403,37 @@ def main() -> int:
         filename = filename.replace("_report.csv", f"_{args.output_suffix}_report.csv")
     out = settings.reporting.output_dir / filename
     write_professional_long_report(tickers, universe, snapshots, out, sector_map=sector_map)
+    write_progress(
+        88,
+        "דוח",
+        done=universe_count,
+        total=universe_count,
+        message=f"{profile_label}: בונה דוח…",
+        profile_id=profile_id,
+        profile_label=profile_label,
+    )
     report = pd.read_csv(out)
+    write_progress(
+        92,
+        "העשרה",
+        done=universe_count,
+        total=universe_count,
+        message=f"{profile_label}: העשרה (גרפים/חדשות לפי רמה)",
+        profile_id=profile_id,
+        profile_label=profile_label,
+    )
     report = _attach_hourly_charts(report, provider, args.intraday_top, end, log)
     report = _attach_news(report, provider, args.news_top, log)
+    _validate_profile_thresholds(report, profile, log)
+    write_progress(
+        100,
+        "הושלם",
+        done=universe_count,
+        total=universe_count,
+        message=f"{profile_label}: הסריקה הסתיימה",
+        profile_id=profile_id,
+        profile_label=profile_label,
+    )
     report.to_csv(out, index=False, encoding="utf-8")
 
     print("scanner_status=ok")
@@ -345,4 +452,12 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        import traceback
+
+        traceback.print_exc()
+        print(f"scanner_status=error")
+        print(f"error={exc}")
+        raise SystemExit(1) from exc

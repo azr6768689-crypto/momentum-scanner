@@ -26,21 +26,23 @@ def _run_initial_scan() -> None:
 
     universe_csv = ROOT / os.getenv("SCANNER_UNIVERSE_CSV", "data/universe/polygon_liquid_us.csv")
     sector_map = ROOT / os.getenv("SCANNER_SECTOR_MAP", "data/universe/sector_map.csv")
-    intraday_top = os.getenv("SCANNER_INTRADAY_TOP", "50")
-    news_top = os.getenv("SCANNER_NEWS_TOP", "100")
-    output_suffix = os.getenv("SCANNER_OUTPUT_SUFFIX", "full_us_10")
+    profile_id = os.getenv("SCAN_PROFILE", "simple")
 
-    profile = os.getenv("SCAN_PROFILE", "simple")
+    sys.path.insert(0, str(ROOT))
+    from src.scan_profiles import get_profile
+
+    profile = get_profile(profile_id)
     cmd = [
         sys.executable,
         "scripts/run_pro_scanner.py",
         "--profile",
-        profile,
+        profile.id,
         "--sector-map",
         str(sector_map),
-        "--output-suffix",
-        output_suffix,
     ]
+    output_suffix = os.getenv("SCANNER_OUTPUT_SUFFIX", "").strip()
+    if output_suffix:
+        cmd.extend(["--output-suffix", output_suffix])
     if universe_csv.exists():
         cmd.extend(["--universe-csv", str(universe_csv)])
     else:

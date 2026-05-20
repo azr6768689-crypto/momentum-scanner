@@ -6,4 +6,4 @@ enableCORS = false
 gatherUsageStats = false
 
 [client]
-toolbarMode = "auto"
+toolbarMode = "minimal"

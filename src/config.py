@@ -306,6 +306,19 @@ def _build_rate_limits(raw: dict[str, Any]) -> dict[str, RateLimitConfig]:
     return result
 
 
+_VALID_DATA_PROVIDERS = frozenset({"demo", "tiingo", "polygon", "alpaca"})
+
+
+def _normalize_data_provider(raw: str | None) -> str:
+    """Map DATA_PROVIDER to a known value; fix common HF Secrets mistakes."""
+    provider = (raw or "demo").lower().strip()
+    if provider in _VALID_DATA_PROVIDERS:
+        return provider
+    if os.getenv("POLYGON_API_KEY", "").strip():
+        return "polygon"
+    return "demo"
+
+
 def load_settings(config_dir: Path | None = None) -> Settings:
     """Load and validate all configuration. Call this once at startup.
 
@@ -335,13 +348,9 @@ def load_settings(config_dir: Path | None = None) -> Settings:
 
     # 3. Resolve provider: .env wins unless settings.yaml has an explicit override
     provider_override = (settings_yaml.get("data") or {}).get("provider_override")
-    provider = (provider_override or os.getenv("DATA_PROVIDER", "demo")).lower().strip()
-
-    valid_providers = {"demo", "tiingo", "polygon", "alpaca"}
-    if provider not in valid_providers:
-        raise RuntimeError(
-            f"Invalid DATA_PROVIDER='{provider}'. Must be one of {valid_providers}."
-        )
+    provider = _normalize_data_provider(
+        provider_override or os.getenv("DATA_PROVIDER", "demo")
+    )
 
     # 4. Build typed sections
     data_block = settings_yaml["data"]
@@ -491,7 +500,10 @@ def load_settings(config_dir: Path | None = None) -> Settings:
     return Settings(
         provider=provider,
         _tiingo_api_key=os.getenv("TIINGO_API_KEY", "").strip(),
-        _polygon_api_key=os.getenv("POLYGON_API_KEY", "").strip(),
+        _polygon_api_key=(
+            os.getenv("POLYGON_API_KEY", "").strip()
+            or os.getenv("MASSIVE_API_KEY", "").strip()
+        ),
         _alpaca_api_key=os.getenv("ALPACA_API_KEY", "").strip(),
         _alpaca_secret_key=os.getenv("ALPACA_SECRET_KEY", "").strip(),
         _alpaca_base_url=os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets"),

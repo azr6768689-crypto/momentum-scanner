@@ -39,8 +39,75 @@ import streamlit.components.v1 as components
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from src.report_compare import attach_rank_delta
+from src.report_paths import is_official_report_csv
+
 # Path constants
 REPORTS_DIR = ROOT / "data" / "reports"
+
+# Hugging Face: full scan runs on the server (user only needs a browser).
+CLOUD_SCAN_WORKERS = 6
+
+BRAND_HE = "סורק הזהב"
+BRAND_EN = "Golden Scanner"
+LOGO_MARK = "GS"
+CLOUD_APP_URL = "https://azr6768689-momentum-scanner.hf.space"
+# Same Space on Hugging Face (works when logged in; use if *.hf.space returns 404).
+CLOUD_SPACE_PAGE_URL = "https://huggingface.co/spaces/azr6768689/momentum-scanner"
+
+
+def _is_cloud_space() -> bool:
+    return bool(
+        os.getenv("SPACE_ID")
+        or os.getenv("SPACE_REPO_NAME")
+        or os.getenv("STREAMLIT_SHARING_MODE")
+    )
+
+
+def _resolve_polygon_api_key() -> str:
+    for name in ("POLYGON_API_KEY", "MASSIVE_API_KEY", "POLYGON_KEY"):
+        value = os.getenv(name, "").strip()
+        if not value:
+            continue
+        if value.lower() in {"polygon", "demo", "tiingo"}:
+            continue
+        if value.startswith("hf_"):
+            continue
+        return value
+    return ""
+
+
+def _preflight_polygon_key() -> tuple[bool, str]:
+    key = _resolve_polygon_api_key()
+    if not key:
+        return (
+            False,
+            "חסר מפתח Polygon ב-Secrets. הוסף secret בשם POLYGON_API_KEY "
+            "(רק המפתח מ-polygon.io, לא DATA_PROVIDER).",
+        )
+    try:
+        import requests
+
+        resp = requests.get(
+            "https://api.polygon.io/v3/reference/tickers/AAPL",
+            params={"apiKey": key},
+            timeout=20,
+        )
+        if resp.status_code == 401:
+            return False, "מפתח Polygon נדחה (401). בדוק שהעתקת את המפתח הנכון."
+        if resp.status_code == 403:
+            return False, "מפתח Polygon ללא הרשאה (403)."
+        if resp.status_code >= 400:
+            return False, f"Polygon החזיר שגיאה {resp.status_code}: {resp.text[:200]}"
+    except Exception as exc:
+        return False, f"לא הצלחתי לבדוק את Polygon: {exc}"
+    return True, "ok"
+
+
+def _cloud_scan_limit(profile_id: str) -> int | None:
+    """No symbol cap on cloud — full universe scan on server."""
+    _ = profile_id
+    return None
 
 # Status color palette (consistent across CSS + badges)
 STATUS_COLORS = {
@@ -71,8 +138,8 @@ BAND_LABELS = {
 # =============================================================================
 
 st.set_page_config(
-    page_title="Momentum Decision Support",
-    page_icon="📈",
+    page_title=f"{BRAND_EN} | {BRAND_HE}",
+    page_icon="✦",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -87,16 +154,15 @@ def _rerun_app() -> None:
 
 def _render_sidebar_brand() -> None:
     st.markdown(
-        """
+        f"""
         <div class="sidebar-brand">
             <div class="sidebar-brand-top">
                 <div>
-                    <div class="sidebar-brand-title">Momentum Scanner</div>
-                    <div class="sidebar-brand-sub">סורק לונג מקצועי · US Equities</div>
+                    <div class="sidebar-brand-title">{html.escape(BRAND_HE)}</div>
+                    <div class="sidebar-brand-sub">{html.escape(BRAND_EN)} · US Equities</div>
                 </div>
-                <div class="sidebar-brand-logo">MS</div>
+                <div class="sidebar-brand-logo gold-logo-mark">{LOGO_MARK}</div>
             </div>
-            <span class="sidebar-pill">Decision Support</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -105,6 +171,242 @@ def _render_sidebar_brand() -> None:
 
 def _render_sidebar_section(title: str) -> None:
     st.markdown(f'<div class="sidebar-section-title">{html.escape(title)}</div>', unsafe_allow_html=True)
+
+
+GOOGLE_FINANCE_AI_URL = "https://www.google.com/finance/beta/"
+TRADINGVIEW_COPILOT_EXTENSION_URL = (
+    "https://chromewebstore.google.com/detail/tradingview-remix-ai-char/"
+    "fchmejnoncmdhlebgdgifdnehoibalnd"
+)
+
+
+def _google_finance_url(symbol: str = "") -> str:
+    sym = str(symbol or "").upper().strip()
+    if sym:
+        return f"https://www.google.com/finance/quote/{quote(sym)}:NASDAQ"
+    return GOOGLE_FINANCE_AI_URL
+
+
+def _tradingview_copilot_chart_url(symbol: str = "") -> str:
+    sym = str(symbol or "").upper().strip()
+    if sym:
+        return _tradingview_url(sym)
+    return "https://www.tradingview.com/chart/"
+
+
+def _scan_context_ticker() -> str:
+    for key in ("selected_ticker", "detail_ticker", "last_ticker"):
+        val = st.session_state.get(key)
+        if val:
+            return str(val).upper().strip()
+    raw = str(st.session_state.get("pro_table_ticker_filter", "") or "").strip().upper()
+    if raw:
+        return raw.split(",")[0].strip()
+    qp = getattr(st, "query_params", None)
+    if qp is not None:
+        t = qp.get("ticker") or qp.get("symbol")
+        if isinstance(t, list):
+            t = t[0] if t else ""
+        if t:
+            return str(t).upper().strip()
+    return ""
+
+
+def _finviz_url(symbol: str = "") -> str:
+    sym = str(symbol or "").upper().strip()
+    if sym:
+        return f"https://finviz.com/quote.ashx?t={quote(sym)}"
+    return "https://finviz.com/"
+
+
+def _render_scan_assistant_links() -> None:
+    """External research: Google Finance, TradingView, Finviz."""
+    ticker = _scan_context_ticker()
+    ticker_note = (
+        f'<div class="advisory-ticker">טיקר נוכחי: <strong>{html.escape(ticker)}</strong></div>'
+        if ticker
+        else '<div class="advisory-ticker">בחר מניה בטבלה או הזן סימבול בסינון</div>'
+    )
+    gf = html.escape(_google_finance_url(ticker))
+    tv = html.escape(_tradingview_copilot_chart_url(ticker))
+    fv = html.escape(_finviz_url(ticker))
+    st.markdown(
+        f"""
+        <div class="advisory-hub">
+            {ticker_note}
+            <div class="advisory-tiles">
+                <a class="advisory-tile advisory-tile-gf" href="{gf}" target="_blank" rel="noopener">
+                    <span class="advisory-tile-kicker">AI · חדשות</span>
+                    <span class="advisory-tile-title">Google Finance</span>
+                    <span class="advisory-tile-sub">Gemini · Deep Search</span>
+                </a>
+                <a class="advisory-tile advisory-tile-tv" href="{tv}" target="_blank" rel="noopener">
+                    <span class="advisory-tile-kicker">גרפים</span>
+                    <span class="advisory-tile-title">TradingView</span>
+                    <span class="advisory-tile-sub">גרף + Copilot AI</span>
+                </a>
+                <a class="advisory-tile advisory-tile-fv" href="{fv}" target="_blank" rel="noopener">
+                    <span class="advisory-tile-kicker">מפת חום</span>
+                    <span class="advisory-tile-title">Finviz</span>
+                    <span class="advisory-tile-sub">סקטור · ווליום · טכני</span>
+                </a>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.caption("הקישורים נפתחים בטאב חדש · מומלץ לצמד לניתוח מהסורק")
+
+
+def _render_cloud_access_panel() -> None:
+    """Shareable link + short instructions for email / any device."""
+    url = os.getenv("PUBLIC_APP_URL", CLOUD_APP_URL).strip() or CLOUD_APP_URL
+    space_page = (os.getenv("PUBLIC_SPACE_PAGE_URL", "") or CLOUD_SPACE_PAGE_URL).strip()
+    with st.expander("🔗 גישה מכל מחשב", expanded=True):
+        st.markdown("**קישור ישיר לאפליקציה (מומלץ לשיתוף)**")
+        st.markdown(
+            f'<a class="cloud-access-url" href="{html.escape(url)}" target="_blank" rel="noopener">'
+            f"{html.escape(url)}</a>",
+            unsafe_allow_html=True,
+        )
+        st.text_input("העתק קישור", value=url, label_visibility="collapsed", key="cloud_access_url_copy")
+        if space_page:
+            st.markdown("**קישור לדף ה-Space ב-Hugging Face** (אם הקישור הישיר לא נפתח)")
+            st.markdown(
+                f'<a class="cloud-access-url" href="{html.escape(space_page)}" target="_blank" rel="noopener">'
+                f"{html.escape(space_page)}</a>",
+                unsafe_allow_html=True,
+            )
+            st.text_input(
+                "העתק דף Space",
+                value=space_page,
+                label_visibility="collapsed",
+                key="cloud_space_page_copy",
+            )
+        st.caption(
+            "אם מופיע **404**, ריק, או \"Application error\": ב-Hugging Face פתח את דף ה-Space "
+            "והגדר **Public** (Settings → Visibility), או נסה אחרי **התחברות** לחשבון HF. "
+            "בכניסה לאפליקציה הזן את הסיסמה שהוגדרה ב-Secrets (`DASHBOARD_PASSWORD`)."
+        )
+
+
+def _rank_delta_badge_html(delta: str) -> str:
+    d = str(delta or "—")
+    css = "rank-delta-flat"
+    if d == "חדש":
+        css = "rank-delta-new"
+    elif d.startswith("↑"):
+        css = "rank-delta-up"
+    elif d.startswith("↓"):
+        css = "rank-delta-down"
+    return f'<span class="rank-delta-badge {css}">{html.escape(d)}</span>'
+
+
+def _build_ticker_advice_lines(row: pd.Series) -> list[str]:
+    """Hebrew advisory bullets derived from the report row (DF)."""
+    lines: list[str] = []
+    level = str(row.get("רמה", "") or "")
+    prob = int(row.get("הסתברות %", 0) or 0)
+    pattern = str(row.get("דפוס", "") or "")
+    breakout = str(row.get("מצב פריצה", "") or "")
+    market_ok = str(row.get("אישור שוק ללונג", "") or "")
+    rvol = float(row.get("ווליום יחסי", 0) or 0)
+    rank_delta = str(row.get("שינוי דירוג", "") or "—")
+    entry = row.get("נקודת כניסה")
+    stop = row.get("סטופ / ביטול", row.get("הערת סיכון", ""))
+
+    if level == "A+ Setup":
+        lines.append("מועמדת A+ — עומדת בכל שערי האיכות. התמקד באישור פריצה מעל נקודת הכניסה עם ווליום.")
+    elif level == "Watchlist":
+        lines.append("Watchlist — קרובה ל-setup. המתן טריגר ברור (פריצה + ווליום) לפני כניסה.")
+    elif level == "Early Momentum":
+        lines.append("מומנטום מוקדם — פוטנציאל אבל עדיין לא A+. מעקב הדוק, גודל פוזיציה קטן יותר.")
+    else:
+        lines.append("לא ברמת כניסה כרגע לפי הסורק — עדיף לרשימת מעקב בלבד.")
+
+    if prob >= 90:
+        lines.append(f"ציון הסתברות גבוה ({prob}/100) — איכות סט-אפ חזקה ביחס למניות אחרות בדוח.")
+    elif prob >= 75:
+        lines.append(f"ציון בינוני-גבוה ({prob}/100) — בדוק שאין התנגשות עם מגמת שוק חלשה.")
+    else:
+        lines.append(f"ציון נמוך יחסית ({prob}/100) — זהירות, אל תסמוך על דירוג בלבד.")
+
+    if pattern and pattern != "אין דפוס פריצה איכותי כרגע":
+        lines.append(f"דפוס מוביל: {pattern}.")
+    if breakout:
+        lines.append(f"פריצה: {breakout}.")
+    if market_ok == "תומך":
+        lines.append("שוק תומך ללונג — רוח בעובר.")
+    elif market_ok and market_ok != "לא נבדק":
+        lines.append(f"שוק: {market_ok} — שקול גודל פוזיציה.")
+    if rvol >= 1.5:
+        lines.append(f"ווליום יחסי חזק ({rvol:.1f}x) — מאשר עניין.")
+    elif rvol < 0.9:
+        lines.append(f"ווליום חלש ({rvol:.1f}x) — חסר אישור קונים.")
+
+    if rank_delta.startswith("↑"):
+        lines.append(f"עלתה בדירוג לעומת אתמול ({rank_delta}) — המומנטום מתחזק ביחס לדוח הקודם.")
+    elif rank_delta.startswith("↓"):
+        lines.append(f"ירדה בדירוג ({rank_delta}) — בדוק אם יש משיכת רווחים או חולשה יחסית.")
+    elif rank_delta == "חדש":
+        lines.append("חדשה בטופ הדירוג היום — לא הייתה באותו דוח אתמול.")
+
+    if pd.notna(entry):
+        try:
+            lines.append(f"טריגר מוצע: מעל ${float(entry):.2f}.")
+        except (TypeError, ValueError):
+            pass
+    if stop and str(stop).strip():
+        lines.append(f"ניהול סיכון: {str(stop).strip()[:120]}")
+
+    lines.append("זה יעוץ מבוסס דאטה מהסורק — לא המלצת קנייה/מכירה.")
+    return lines
+
+
+def _render_ticker_advice_card(row: pd.Series) -> None:
+    ticker = str(row.get("סימבול", "")).upper()
+    level = str(row.get("רמה", ""))
+    prob = int(row.get("הסתברות %", 0) or 0)
+    rank = row.get("דירוג", "—")
+    delta = str(row.get("שינוי דירוג", "—"))
+    bullets = "".join(f"<li>{html.escape(line)}</li>" for line in _build_ticker_advice_lines(row))
+    st.markdown(
+        f"""
+        <div class="ticker-advice-card">
+            <div class="ticker-advice-title">{html.escape(ticker)} · {html.escape(level)} · {prob}/100</div>
+            <div class="ticker-advice-meta">
+                דירוג היום #{html.escape(str(rank))} · שינוי מאתמול: {_rank_delta_badge_html(delta)}
+            </div>
+            <ul class="ticker-advice-list">{bullets}</ul>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_decision_support_panel(df: pd.DataFrame, *, prev_report_date: str = "") -> None:
+    with st.expander("💡 יעוץ לפי מניה", expanded=True):
+        if df.empty or "סימבול" not in df.columns:
+            st.info("אין דאטה ליעוץ — טען דוח תחילה.")
+            return
+        symbols = df["סימבול"].astype(str).tolist()
+        hint = _scan_context_ticker()
+        default_idx = symbols.index(hint) if hint in symbols else 0
+        pick = st.selectbox(
+            "בחר מניה",
+            options=symbols,
+            index=default_idx,
+            key="advice_ticker_pick",
+        )
+        st.session_state["selected_ticker"] = pick.upper()
+        st.session_state["detail_ticker"] = pick.upper()
+        row = df[df["סימבול"].astype(str) == pick].iloc[0]
+        if prev_report_date:
+            st.caption(f"השוואת דירוג מול דוח: {prev_report_date}")
+        _render_ticker_advice_card(row)
+        st.divider()
+        st.markdown("**קישורים חיצוניים**")
+        _render_scan_assistant_links()
 
 
 def _render_sidebar_file_card(name: str, size_kb: float, generated: str) -> None:
@@ -129,10 +431,10 @@ def _require_dashboard_password() -> None:
         return
 
     st.markdown(
-        """
+        f"""
         <div class="hero-card" style="max-width: 520px; margin: 4rem auto 1rem;">
-            <div class="hero-title" style="font-size: 2rem;">Momentum Scanner</div>
-            <div class="hero-subtitle">כניסה מאובטחת לסורק הפרטי</div>
+            <div class="hero-title" style="font-size: 2rem;">{html.escape(BRAND_HE)}</div>
+            <div class="hero-subtitle">{html.escape(BRAND_EN)} · כניסה מאובטחת</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -140,10 +442,17 @@ def _require_dashboard_password() -> None:
     st.caption("המערכת מוגנת בסיסמה כי היא מכילה כלי סריקה פרטי ונתוני API.")
     entered = st.text_input("סיסמה", type="password")
     if st.button("כניסה", use_container_width=True, type="primary"):
-        if hmac.compare_digest(entered, password):
+        if not entered.strip():
+            st.warning("הזן סיסמה.")
+        elif hmac.compare_digest(
+            entered.encode("utf-8"),
+            password.encode("utf-8"),
+        ):
             st.session_state["dashboard_authenticated"] = True
+            st.session_state.pop("auto_scan_on_entry_done", None)
             _rerun_app()
-        st.error("סיסמה לא נכונה.")
+        else:
+            st.error("סיסמה לא נכונה. בדוק ב-Hugging Face → Settings → Secrets את DASHBOARD_PASSWORD.")
     st.stop()
 
 
@@ -152,12 +461,22 @@ _require_dashboard_password()
 st.markdown(
     """
     <style>
+    @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700;800&family=Playfair+Display:wght@600;700&display=swap');
+    header[data-testid="stHeader"],
+    [data-testid="stToolbar"],
+    [data-testid="stDecoration"] {
+        display: none !important;
+        height: 0 !important;
+        min-height: 0 !important;
+    }
+    footer, #MainMenu { visibility: hidden; }
+    .block-container { padding-top: 0.75rem !important; }
     .stApp {
         background:
             radial-gradient(circle at 8% 5%, rgba(56, 189, 248, 0.35), transparent 26%),
-            radial-gradient(circle at 92% 2%, rgba(244, 114, 182, 0.32), transparent 28%),
+            radial-gradient(circle at 92% 2%, rgba(14, 165, 233, 0.12), transparent 28%),
             radial-gradient(circle at 50% 35%, rgba(34, 197, 94, 0.15), transparent 24%),
-            linear-gradient(135deg, #08111f 0%, #132a4c 38%, #30114d 70%, #111827 100%);
+            linear-gradient(160deg, #060d18 0%, #0c1a2e 45%, #0f2438 100%);
         color: #f8fafc;
     }
     .block-container {
@@ -255,6 +574,14 @@ st.markdown(
         border-color: rgba(96, 165, 250, 0.22) !important;
         margin: 0.85rem 0 !important;
     }
+    .sidebar-brand,
+    .hero-card,
+    .metric-card,
+    .sidebar-card,
+    .scanner-top {
+        pointer-events: none;
+        user-select: none;
+    }
     .sidebar-brand {
         padding: 14px 14px 12px;
         margin: 0 0 10px 0;
@@ -274,23 +601,31 @@ st.markdown(
         gap: 10px;
         margin-bottom: 8px;
     }
+    .gold-logo-mark {
+        font-family: 'Cinzel', 'Playfair Display', Georgia, serif;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        color: #1c1408;
+        background: linear-gradient(145deg, #fef3c7 0%, #d4af37 40%, #b8860b 75%, #fffbeb 100%) !important;
+        border: 1px solid rgba(254, 243, 199, 0.7);
+        box-shadow: 0 0 26px rgba(212, 175, 55, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+        text-shadow: 0 1px 0 rgba(255, 255, 255, 0.3);
+    }
     .sidebar-brand-logo {
         width: 42px;
         height: 42px;
         border-radius: 14px;
         display: grid;
         place-items: center;
-        font-weight: 950;
-        font-size: 0.95rem;
-        color: #f8fafc;
-        background: linear-gradient(135deg, #2563eb, #06b6d4);
-        box-shadow: 0 0 22px rgba(34, 211, 238, 0.35);
+        font-size: 0.72rem;
     }
     .sidebar-brand-title {
-        color: #f8fafc;
-        font-size: 1.05rem;
-        font-weight: 900;
+        font-family: 'Cinzel', 'Playfair Display', Georgia, serif;
+        color: #fef3c7;
+        font-size: 1.08rem;
+        font-weight: 800;
         line-height: 1.2;
+        letter-spacing: 0.02em;
     }
     .sidebar-brand-sub {
         color: #bfdbfe;
@@ -415,8 +750,12 @@ st.markdown(
         transition: transform .18s ease, box-shadow .18s ease;
     }
     .metric-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 24px 54px rgba(14,165,233,0.22), inset 0 1px 0 rgba(255,255,255,.14);
+        transform: none;
+        box-shadow: 0 18px 42px rgba(2,6,23,0.30), inset 0 1px 0 rgba(255,255,255,.08);
+    }
+    [data-testid="stSidebar"] [data-testid="stVerticalBlock"] > div {
+        position: relative;
+        z-index: 2;
     }
     .status-badge {
         display: inline-block;
@@ -455,38 +794,274 @@ st.markdown(
         margin-top: 24px;
     }
     .hero-card {
-        background:
-            radial-gradient(circle at 8% 15%, rgba(34,211,238,0.50), transparent 28%),
-            radial-gradient(circle at 92% 10%, rgba(244,114,182,0.50), transparent 30%),
-            linear-gradient(135deg, rgba(14,165,233,.90), rgba(124,58,237,.88) 48%, rgba(236,72,153,.82));
+        background: linear-gradient(180deg, rgba(10, 22, 40, 0.98), rgba(15, 35, 62, 0.96));
         padding: 28px 30px;
-        border-radius: 24px;
-        border: 1px solid rgba(255,255,255,0.28);
-        box-shadow: 0 28px 80px rgba(14,165,233,0.24), 0 18px 45px rgba(0,0,0,0.35);
+        border-radius: 20px;
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        box-shadow: 0 24px 60px rgba(2, 6, 23, 0.45);
         margin-bottom: 18px;
         position: relative;
         overflow: hidden;
     }
-    .hero-card::after {
-        content: "";
-        position: absolute;
-        inset: auto -8% -35% -8%;
-        height: 90px;
-        background: radial-gradient(ellipse, rgba(255,255,255,.25), transparent 62%);
-    }
     .hero-title {
-        color: #ffffff;
-        font-size: clamp(2rem, 3vw, 3.15rem);
-        font-weight: 950;
+        color: #f8fafc;
+        font-size: clamp(1.6rem, 2.5vw, 2.4rem);
+        font-weight: 800;
         margin-bottom: 6px;
-        letter-spacing: -0.04em;
-        text-shadow: 0 4px 22px rgba(0,0,0,0.45);
+        letter-spacing: -0.02em;
     }
     .hero-subtitle {
-        color: #ffffff;
-        font-size: 1rem;
+        color: #94a3b8;
+        font-size: 0.95rem;
+        font-weight: 500;
+    }
+    .scanner-top {
+        position: relative;
+        margin: 0 0 1.25rem 0;
+        border-radius: 22px;
+        overflow: hidden;
+        border: 1px solid rgba(212, 175, 55, 0.32);
+        background:
+            radial-gradient(120% 80% at 100% 0%, rgba(212, 175, 55, 0.14), transparent 50%),
+            radial-gradient(90% 70% at 0% 100%, rgba(6, 182, 212, 0.12), transparent 45%),
+            linear-gradient(165deg, #0a0c10 0%, #121820 55%, #0d1218 100%);
+        box-shadow: 0 28px 70px rgba(2, 6, 23, 0.55);
+        direction: rtl;
+        pointer-events: none;
+        user-select: none;
+    }
+    .scan-progress-profile {
+        color: #fcd34d;
+        font-family: 'Cinzel', 'Playfair Display', Georgia, serif;
+        font-size: 0.9rem;
         font-weight: 700;
-        text-shadow: 0 2px 10px rgba(0,0,0,0.45);
+        margin: 0.15rem 0 0.1rem;
+        direction: rtl;
+        letter-spacing: 0.02em;
+    }
+    .scan-progress-label {
+        color: #cbd5e1;
+        font-size: 0.8rem;
+        font-weight: 600;
+        margin: 0.25rem 0;
+        direction: rtl;
+    }
+    .advisory-hub {
+        direction: rtl;
+        margin: 2px 0 8px;
+        padding: 12px 12px 10px;
+        border-radius: 16px;
+        border: 1px solid rgba(212, 175, 55, 0.4);
+        background:
+            radial-gradient(circle at 100% 0%, rgba(212, 175, 55, 0.12), transparent 42%),
+            linear-gradient(160deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.98));
+        box-shadow: 0 12px 28px rgba(2, 6, 23, 0.35);
+        pointer-events: auto;
+    }
+    .advisory-ticker {
+        color: #fde68a;
+        font-size: 0.78rem;
+        font-weight: 600;
+        margin-bottom: 10px;
+    }
+    .advisory-tiles {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 8px;
+    }
+    .advisory-tile {
+        display: block;
+        text-decoration: none !important;
+        padding: 11px 13px;
+        border-radius: 13px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        transition: transform 0.16s ease, box-shadow 0.16s ease;
+    }
+    .advisory-tile:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 12px 26px rgba(0, 0, 0, 0.38);
+    }
+    .advisory-tile-gf {
+        background: linear-gradient(135deg, rgba(37, 99, 235, 0.55), rgba(59, 130, 246, 0.28));
+        border-color: rgba(147, 197, 253, 0.65);
+    }
+    .advisory-tile-tv {
+        background: linear-gradient(135deg, rgba(79, 70, 229, 0.55), rgba(6, 182, 212, 0.32));
+        border-color: rgba(129, 140, 248, 0.65);
+    }
+    .advisory-tile-fv {
+        background: linear-gradient(135deg, rgba(22, 163, 74, 0.55), rgba(5, 150, 105, 0.3));
+        border-color: rgba(134, 239, 172, 0.6);
+    }
+    .advisory-tile-kicker {
+        display: block;
+        font-size: 0.64rem;
+        font-weight: 800;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.82);
+        margin-bottom: 3px;
+    }
+    .advisory-tile-title {
+        display: block;
+        font-size: 0.96rem;
+        font-weight: 850;
+        color: #ffffff;
+    }
+    .advisory-tile-sub {
+        display: block;
+        font-size: 0.72rem;
+        color: #e2e8f0;
+        margin-top: 2px;
+    }
+    [data-testid="stSidebar"] [data-testid="stExpander"]:has(summary) {
+        border-color: rgba(212, 175, 55, 0.35) !important;
+        background: rgba(15, 23, 42, 0.65) !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stExpander"] summary {
+        color: #fde68a !important;
+        font-weight: 850 !important;
+    }
+    .scan-panel-box {
+        border: 1px solid rgba(96, 165, 250, 0.3);
+        border-radius: 16px;
+        padding: 2px 10px 12px;
+        margin: 0 0 12px;
+        background: rgba(15, 23, 42, 0.5);
+    }
+    .integrity-ok { color: #4ade80; font-weight: 700; }
+    .integrity-warn { color: #fbbf24; font-weight: 700; }
+    .scanner-top-glow {
+        position: absolute;
+        inset: 0;
+        background:
+            radial-gradient(ellipse 80% 60% at 100% 0%, rgba(14, 165, 233, 0.14), transparent 55%),
+            radial-gradient(ellipse 60% 50% at 0% 100%, rgba(212, 175, 55, 0.08), transparent 50%);
+        pointer-events: none;
+    }
+    .scanner-top-inner {
+        position: relative;
+        padding: 1.35rem 1.5rem 1.15rem;
+    }
+    .scanner-top-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+        flex-wrap: wrap;
+        margin-bottom: 0.85rem;
+    }
+    .scanner-top-brand {
+        display: flex;
+        align-items: center;
+        gap: 0.85rem;
+        min-width: 0;
+    }
+    .scanner-top-logo {
+        width: 56px;
+        height: 56px;
+        border-radius: 16px;
+        display: grid;
+        place-items: center;
+        font-size: 0.82rem;
+        flex-shrink: 0;
+    }
+    .scanner-top-title {
+        font-family: 'Cinzel', 'Playfair Display', Georgia, serif;
+        background: linear-gradient(90deg, #fffbeb 0%, #fde68a 35%, #d4af37 62%, #fef3c7 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        font-size: clamp(1.4rem, 2.4vw, 2rem);
+        font-weight: 800;
+        line-height: 1.12;
+        letter-spacing: 0.03em;
+    }
+    .scanner-top-sub {
+        color: #94a3b8;
+        font-size: 0.82rem;
+        font-weight: 500;
+        margin-top: 0.2rem;
+        line-height: 1.4;
+    }
+    .scanner-top-badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        align-items: center;
+        justify-content: flex-end;
+    }
+    .scanner-badge {
+        display: inline-block;
+        padding: 0.28rem 0.65rem;
+        border-radius: 999px;
+        font-size: 0.68rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        color: #e2e8f0;
+        background: rgba(30, 41, 59, 0.85);
+        border: 1px solid rgba(148, 163, 184, 0.28);
+    }
+    .scanner-badge-gold {
+        color: #fef3c7;
+        border-color: rgba(212, 175, 55, 0.45);
+        background: rgba(120, 90, 20, 0.25);
+    }
+    .scanner-badge-live {
+        color: #bbf7d0;
+        border-color: rgba(34, 197, 94, 0.45);
+        background: rgba(22, 101, 52, 0.28);
+    }
+    .scanner-top-meta {
+        color: #cbd5e1;
+        font-size: 0.8rem;
+        font-weight: 600;
+        margin-bottom: 1rem;
+        padding-bottom: 0.85rem;
+        border-bottom: 1px solid rgba(51, 65, 85, 0.65);
+    }
+    .scanner-kpi-grid {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: 0.65rem;
+    }
+    @media (max-width: 1100px) {
+        .scanner-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width: 640px) {
+        .scanner-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    .scanner-kpi {
+        padding: 0.65rem 0.75rem;
+        border-radius: 14px;
+        background: rgba(15, 23, 42, 0.72);
+        border: 1px solid rgba(51, 65, 85, 0.55);
+        border-top: 2px solid var(--kpi-accent, #38bdf8);
+    }
+    .scanner-kpi-label {
+        color: #94a3b8;
+        font-size: 0.68rem;
+        font-weight: 700;
+        margin-bottom: 0.25rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+    }
+    .scanner-kpi-value {
+        color: #f8fafc;
+        font-size: clamp(1.1rem, 1.8vw, 1.45rem);
+        font-weight: 800;
+        line-height: 1.1;
+        font-variant-numeric: tabular-nums;
+    }
+    .scanner-market-strip {
+        margin-top: 0.75rem;
+        padding: 0.55rem 0.85rem;
+        border-radius: 12px;
+        background: rgba(15, 23, 42, 0.65);
+        border: 1px solid rgba(51, 65, 85, 0.5);
+        color: #e2e8f0;
+        font-size: 0.82rem;
+        font-weight: 600;
     }
     .setup-card {
         background:
@@ -666,6 +1241,111 @@ st.markdown(
     .momentum-card.heatbar-hot::before { background: linear-gradient(90deg,#f59e0b,#facc15); }
     .momentum-card.heatbar-strong::before { background: linear-gradient(90deg,#16a34a,#22c55e); }
     .momentum-card.heatbar-watch::before { background: linear-gradient(90deg,#0284c7,#06b6d4); }
+    .chart-card-premium {
+        border-radius: 22px;
+        padding: 16px 16px 12px;
+        margin-bottom: 14px;
+        background:
+            radial-gradient(circle at 100% 0%, rgba(212, 175, 55, 0.14), transparent 40%),
+            linear-gradient(165deg, rgba(15, 23, 42, 0.96), rgba(30, 41, 59, 0.92));
+        border: 1px solid rgba(96, 165, 250, 0.35);
+        box-shadow: 0 22px 50px rgba(2, 6, 23, 0.45);
+    }
+    .chart-card-aplus {
+        border-color: rgba(212, 175, 55, 0.75);
+        box-shadow: 0 0 28px rgba(212, 175, 55, 0.18), 0 22px 50px rgba(2, 6, 23, 0.45);
+    }
+    .chart-card-watch {
+        border-color: rgba(234, 179, 8, 0.55);
+    }
+    .chart-card-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 8px;
+        direction: rtl;
+    }
+    .chart-card-symbol {
+        font-size: 1.55rem;
+        font-weight: 900;
+        color: #fffbeb;
+        letter-spacing: 0.02em;
+    }
+    .chart-card-metrics {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        justify-content: flex-end;
+    }
+    .chart-card-meta {
+        color: #cbd5e1;
+        font-size: 0.8rem;
+        line-height: 1.5;
+        margin: 6px 0 10px;
+        direction: rtl;
+    }
+    .cloud-access-url {
+        color: #fde68a !important;
+        font-weight: 800;
+        font-size: 0.88rem;
+        word-break: break-all;
+        text-decoration: none !important;
+    }
+    .cloud-access-url:hover { color: #fef3c7 !important; text-decoration: underline !important; }
+    .rank-delta-badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 0.72rem;
+        font-weight: 850;
+    }
+    .rank-delta-up { background: rgba(34, 197, 94, 0.25); color: #86efac; border: 1px solid rgba(74, 222, 128, 0.5); }
+    .rank-delta-down { background: rgba(239, 68, 68, 0.22); color: #fca5a5; border: 1px solid rgba(248, 113, 113, 0.45); }
+    .rank-delta-new { background: rgba(56, 189, 248, 0.22); color: #7dd3fc; border: 1px solid rgba(56, 189, 248, 0.45); }
+    .rank-delta-flat { background: rgba(100, 116, 139, 0.25); color: #cbd5e1; }
+    .ticker-advice-card {
+        direction: rtl;
+        padding: 12px 14px;
+        margin: 8px 0 10px;
+        border-radius: 16px;
+        border: 1px solid rgba(212, 175, 55, 0.45);
+        background: linear-gradient(160deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.98));
+    }
+    .ticker-advice-title {
+        color: #fde68a;
+        font-weight: 900;
+        font-size: 1rem;
+        margin-bottom: 4px;
+    }
+    .ticker-advice-meta {
+        color: #94a3b8;
+        font-size: 0.78rem;
+        margin-bottom: 8px;
+    }
+    .ticker-advice-list {
+        margin: 0;
+        padding-right: 1.1rem;
+        color: #e2e8f0;
+        font-size: 0.82rem;
+        line-height: 1.55;
+    }
+    .rank-movers-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        direction: rtl;
+        margin: 0.5rem 0 1rem;
+    }
+    .rank-mover-box {
+        padding: 12px;
+        border-radius: 14px;
+        border: 1px solid rgba(96, 165, 250, 0.28);
+        background: rgba(15, 23, 42, 0.75);
+        font-size: 0.8rem;
+        line-height: 1.5;
+        color: #e2e8f0;
+    }
     .top-movers-grid {
         display: grid;
         grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -913,22 +1593,30 @@ def report_variant_paths(main_report_path: Path) -> dict[str, Path]:
 
 
 def list_all_reports() -> list[Path]:
-    """List all CSV reports, newest first."""
+    """List official CSV reports, newest first (skips test/bench/legacy junk)."""
     if not REPORTS_DIR.exists():
         return []
-    return sorted(REPORTS_DIR.glob("*_report.csv"), key=lambda path: path.stat().st_mtime, reverse=True)
+    paths = [p for p in REPORTS_DIR.glob("*_report.csv") if is_official_report_csv(p)]
+    return sorted(paths, key=lambda path: path.stat().st_mtime, reverse=True)
 
 
 def run_professional_scan_from_dashboard(profile_id: str) -> tuple[bool, str]:
-    from src.scan_profiles import get_profile
+    from src.scan_profiles import apply_profile_to_env, get_profile
 
+    ok_key, key_msg = _preflight_polygon_key()
+    if not ok_key:
+        return False, key_msg
+
+    polygon_key = _resolve_polygon_api_key()
     profile = get_profile(profile_id)
+    apply_profile_to_env(profile)
     universe_csv = Path(os.getenv("SCANNER_UNIVERSE_CSV", "data/universe/polygon_liquid_us.csv"))
     sector_map = Path(os.getenv("SCANNER_SECTOR_MAP", "data/universe/sector_map.csv"))
     timeout_seconds = profile.timeout_seconds
     override = os.getenv("SCAN_TIMEOUT_SECONDS", "").strip()
     if override.isdigit():
         timeout_seconds = int(override)
+    timeout_seconds = max(timeout_seconds, profile.timeout_seconds + 60)
 
     cmd = [
         sys.executable,
@@ -942,6 +1630,14 @@ def run_professional_scan_from_dashboard(profile_id: str) -> tuple[bool, str]:
     ]
     if universe_csv.exists():
         cmd.extend(["--universe-csv", str(universe_csv)])
+    if _is_cloud_space():
+        cmd.extend(["--workers", str(CLOUD_SCAN_WORKERS)])
+
+    scan_env = os.environ.copy()
+    scan_env["POLYGON_API_KEY"] = polygon_key
+    scan_env["DATA_PROVIDER"] = "polygon"
+    if _is_cloud_space():
+        scan_env["SCAN_WORKERS"] = str(CLOUD_SCAN_WORKERS)
 
     try:
         completed = subprocess.run(
@@ -951,11 +1647,17 @@ def run_professional_scan_from_dashboard(profile_id: str) -> tuple[bool, str]:
             text=True,
             timeout=timeout_seconds,
             check=False,
+            env=scan_env,
         )
     except subprocess.TimeoutExpired:
-        return False, f"הסריקה עברה את מגבלת הזמן ({timeout_seconds} שניות)."
+        hint = ""
+        if _is_cloud_space():
+            hint = " בענן הרץ סריקה מלאה מהמחשב והעלה את קובץ הדוח ל-data/reports/."
+        return False, f"הסריקה עברה את מגבלת הזמן ({timeout_seconds} שניות).{hint}"
 
     output = "\n".join(part for part in [completed.stdout, completed.stderr] if part.strip())
+    if completed.returncode != 0 and _is_cloud_space() and "401" in output:
+        output += "\n\nבדוק ש-POLYGON_API_KEY תקין ב-Secrets."
     return completed.returncode == 0, output[-5000:]
 
 
@@ -1009,6 +1711,53 @@ def parse_date_from_filename(path: Path) -> str:
     return m.group(1) if m else path.stem
 
 
+_PROFILE_SUFFIX_HE = {
+    "us_simple": "פשוטה",
+    "us_medium": "בינונית",
+    "us_full": "מקיפה",
+}
+
+
+def report_display_label(path: Path) -> str:
+    """Unique label per report file (date + scan profile)."""
+    m = re.match(r"(\d{4}-\d{2}-\d{2})_(.+)_report\.csv", path.name)
+    if m:
+        date_part, suffix = m.group(1), m.group(2)
+        he = _PROFILE_SUFFIX_HE.get(suffix, suffix.replace("_", " "))
+        return f"{date_part} · {he} ({suffix})"
+    m2 = re.match(r"(\d{4}-\d{2}-\d{2})_report\.csv", path.name)
+    if m2:
+        return m2.group(1)
+    return path.stem
+
+
+def _default_report_index(reports: list[Path], labels: list[str]) -> int:
+    preferred = st.session_state.get("last_scan_report_file", "")
+    if preferred:
+        for idx, path in enumerate(reports):
+            if path.name == preferred:
+                return idx
+    profile_id = st.session_state.get("last_scan_profile", "")
+    suffix = {"simple": "us_simple", "medium": "us_medium", "full": "us_full"}.get(profile_id, "")
+    if suffix:
+        dated: list[tuple[str, int]] = []
+        for idx, path in enumerate(reports):
+            if f"_{suffix}_report.csv" in path.name:
+                m = re.match(r"(\d{4}-\d{2}-\d{2})", path.name)
+                dated.append((m.group(1) if m else "", idx))
+        if dated:
+            dated.sort(reverse=True)
+            return dated[0][1]
+    dated_all: list[tuple[str, int]] = []
+    for idx, path in enumerate(reports):
+        m = re.match(r"(\d{4}-\d{2}-\d{2})", path.name)
+        dated_all.append((m.group(1) if m else "", idx))
+    if dated_all:
+        dated_all.sort(reverse=True)
+        return dated_all[0][1]
+    return 0
+
+
 # =============================================================================
 # Render helpers
 # =============================================================================
@@ -1030,6 +1779,196 @@ def metric_card(label: str, value: str, accent: str = "#3b82f6") -> str:
         f'<div style="color: #94a3b8; font-size: 0.85rem;">{label}</div>'
         f'<div style="color: #f1f5f9; font-size: 1.5rem; font-weight: 700;">{value}</div>'
         f"</div>"
+    )
+
+
+
+def _scanner_kpi_cell(label: str, value: str, accent: str) -> str:
+    return (
+        f'<div class="scanner-kpi" style="--kpi-accent: {accent};">'
+        f'<div class="scanner-kpi-label">{html.escape(label)}</div>'
+        f'<div class="scanner-kpi-value">{html.escape(str(value))}</div>'
+        f"</div>"
+    )
+
+
+def _expected_universe_size() -> int:
+    uni = ROOT / "data" / "universe" / "polygon_liquid_us.csv"
+    if not uni.exists():
+        return 2114
+    try:
+        return len(pd.read_csv(uni))
+    except Exception:
+        return 2114
+
+
+def _scan_coverage_stats(df: pd.DataFrame) -> tuple[int, int, float]:
+    expected = _expected_universe_size()
+    rows = len(df)
+    try:
+        from src.cloud_scan_job import get_status
+
+        job = get_status()
+    except Exception:
+        job = {}
+    usable = int(job.get("symbols_with_usable_data", 0) or 0)
+    if usable <= 0 and "סימבול" in df.columns:
+        usable = int(df["סימבול"].nunique())
+    coverage = float(job.get("coverage_pct", 0) or 0)
+    if coverage <= 0 and expected:
+        coverage = round(100.0 * min(usable, rows) / expected, 1)
+    return expected, usable or rows, coverage
+
+
+def _auto_scan_on_entry_enabled() -> bool:
+    return os.getenv("AUTO_SCAN_ON_ENTRY", "true").lower() not in {"0", "false", "no"}
+
+
+def _maybe_auto_scan_on_entry(profile_id: str) -> None:
+    """Start a full scan once per session when the user opens the scanner."""
+    if not _auto_scan_on_entry_enabled():
+        return
+    if st.session_state.get("auto_scan_on_entry_done"):
+        return
+
+    from src.cloud_scan_job import get_status, is_scan_running, start_full_scan
+
+    if is_scan_running():
+        st.session_state["auto_scan_on_entry_done"] = True
+        return
+
+    ok_pf, pf_msg = _preflight_polygon_key()
+    if not ok_pf:
+        if _is_cloud_space():
+            st.error(pf_msg)
+        return
+
+    started, _msg = start_full_scan(profile_id)
+    st.session_state["auto_scan_on_entry_done"] = True
+    if started:
+        st.session_state["last_scan_profile"] = profile_id
+
+
+def _render_cloud_scan_progress() -> None:
+    from src.cloud_scan_job import get_scan_progress, get_status
+    from src.scan_profiles import get_profile
+
+    job = get_status()
+    state = job.get("state", "idle")
+    if state == "idle":
+        return
+    prog = job.get("progress") or get_scan_progress()
+    profile_label = str(prog.get("profile_label") or job.get("profile_label") or "")
+    profile_id = str(prog.get("profile_id") or job.get("profile") or "")
+    if not profile_label and profile_id:
+        try:
+            profile_label = get_profile(profile_id).label_he
+        except Exception:
+            profile_label = ""
+
+    pct = min(1.0, max(0.0, int(prog.get("percent", 0)) / 100.0))
+    label = html.escape(str(prog.get("message") or prog.get("phase") or "סריקה…"))
+    total = int(prog.get("total", 0) or _expected_universe_size())
+    if profile_label:
+        st.markdown(
+            f'<div class="scan-progress-profile">{html.escape(profile_label)}</div>',
+            unsafe_allow_html=True,
+        )
+    st.markdown(
+        f'<div class="scan-progress-label">{label} · {int(pct * 100)}%</div>',
+        unsafe_allow_html=True,
+    )
+    st.progress(pct)
+    done = int(prog.get("done", 0))
+    if total:
+        st.caption(f"{done:,} / {total:,} מניות")
+    if state == "ok":
+        st.success(f"הושלם · כיסוי דאטה {job.get('coverage_pct', '—')}%")
+    elif state == "error":
+        st.error(str(job.get("message", "שגיאה")))
+
+
+def _render_institutional_scanner_header(
+    df: pd.DataFrame,
+    report_label: str,
+    report_filename: str = "",
+) -> None:
+    """Top header — סורק הזהב."""
+    profile_he = ""
+    for suffix, he in _PROFILE_SUFFIX_HE.items():
+        if suffix in report_filename:
+            profile_he = he
+            break
+
+    scanned = len(df)
+    a_plus = int((df["רמה"] == "A+ Setup").sum()) if "רמה" in df.columns else 0
+    watch = int((df["רמה"] == "Watchlist").sum()) if "רמה" in df.columns else 0
+    early = int((df["רמה"] == "Early Momentum").sum()) if "רמה" in df.columns else 0
+    best = int(df["הסתברות %"].max()) if not df.empty and "הסתברות %" in df.columns else 0
+
+    profile_badge = (
+        f'<span class="scanner-badge scanner-badge-gold">{html.escape(profile_he)}</span>'
+        if profile_he
+        else ""
+    )
+
+    expected, usable, coverage = _scan_coverage_stats(df)
+    cov_class = "integrity-ok" if coverage >= 95 else "integrity-warn"
+    integrity_line = (
+        f'<span class="{cov_class}">כיסוי דאטה {coverage}%</span> '
+        f"({usable:,}/{expected:,} מניות)"
+    )
+
+    market_strip = ""
+    if not df.empty and {"מצב שוק", "ציון שוק", "אישור שוק ללונג"}.issubset(df.columns):
+        market_row = df.iloc[0]
+        support = str(market_row["אישור שוק ללונג"])
+        border = "rgba(34, 197, 94, 0.35)" if support == "תומך" else "rgba(245, 158, 11, 0.35)"
+        market_strip = (
+            f'<div class="scanner-market-strip" style="border-color: {border};">'
+            f"שוק: {html.escape(str(market_row['מצב שוק']))} · "
+            f"ציון {html.escape(str(int(market_row['ציון שוק'])))}/100 · "
+            f"{html.escape(support)}"
+            f"</div>"
+        )
+
+    st.markdown(
+        f"""
+        <div class="scanner-top">
+            <div class="scanner-top-glow"></div>
+            <div class="scanner-top-inner">
+                <div class="scanner-top-row">
+                    <div class="scanner-top-brand">
+                        <div class="scanner-top-logo gold-logo-mark">{LOGO_MARK}</div>
+                        <div>
+                            <div class="scanner-top-title">{html.escape(BRAND_HE)}</div>
+                            <div class="scanner-top-sub">
+                                {html.escape(BRAND_EN)} · US Equities · לונג בלבד
+                            </div>
+                        </div>
+                    </div>
+                    <div class="scanner-top-badges">
+                        <span class="scanner-badge scanner-badge-live">LIVE</span>
+                        <span class="scanner-badge scanner-badge-universe">US</span>
+                        {profile_badge}
+                    </div>
+                </div>
+                <div class="scanner-top-meta">
+                    דוח: {html.escape(report_label)} · {integrity_line}
+                </div>
+                <div class="scanner-kpi-grid">
+                    {_scanner_kpi_cell("נסרקו", f"{scanned:,}", "#38bdf8")}
+                    {_scanner_kpi_cell("A+ Setup", str(a_plus), "#22c55e")}
+                    {_scanner_kpi_cell("Watchlist", str(watch), "#eab308")}
+                    {_scanner_kpi_cell("Early", str(early), "#06b6d4")}
+                    {_scanner_kpi_cell("ציון מוביל", f"{best}/100", "#a855f7")}
+                    {_scanner_kpi_cell("מיון", "הסתברות %", "#64748b")}
+                </div>
+                {market_strip}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
 
@@ -1117,108 +2056,148 @@ def render_signal_card(row: pd.Series) -> None:
             st.write(f"**Target 2:** ${row['Target 2']:.2f}")
 
 
+def _render_scan_sidebar_panel() -> None:
+    """Collapsible scan controls in the sidebar."""
+    if st.session_state.get("scan_sidebar_collapsed", False):
+        if st.button("▶ הצג סריקה", use_container_width=True, key="reopen_scan_panel"):
+            st.session_state["scan_sidebar_collapsed"] = False
+            _rerun_app()
+        return
+
+    title_col, close_col = st.columns([5, 1])
+    with title_col:
+        _render_sidebar_section("סריקה")
+    with close_col:
+        if st.button("✕", key="close_scan_panel", help="סגור מקטע סריקה"):
+            st.session_state["scan_sidebar_collapsed"] = True
+            _rerun_app()
+
+    st.markdown('<div class="scan-panel-box-marker"></div>', unsafe_allow_html=True)
+
+    from src.scan_profiles import list_profiles
+
+    profiles = list_profiles()
+    profile_labels = {p.id: p.label_he for p in profiles}
+    default_profile = os.getenv("SCAN_PROFILE", "simple")
+    if default_profile not in profile_labels:
+        default_profile = "simple"
+    profile_ids = [p.id for p in profiles]
+    selected_profile = st.selectbox(
+        "רמת סריקה",
+        options=profile_ids,
+        index=profile_ids.index(default_profile),
+        format_func=lambda pid: profile_labels[pid],
+        key="scan_profile_select",
+    )
+    selected = next(p for p in profiles if p.id == selected_profile)
+
+    cloud = _is_cloud_space()
+    if cloud:
+        ok_pf, pf_msg = _preflight_polygon_key()
+        if not ok_pf:
+            st.error(pf_msg)
+    from src.cloud_scan_job import get_status, start_full_scan
+
+    _maybe_auto_scan_on_entry(selected_profile)
+    _render_cloud_scan_progress()
+    job = get_status()
+    if cloud and job.get("state") == "running" and hasattr(st, "autorefresh"):
+        st.autorefresh(interval=12_000, key="cloud_scan_progress_poll")
+
+    scan_clicked = st.button(
+        f"▶ סריקה — {selected.label_he}",
+        use_container_width=True,
+        type="primary",
+    )
+    if scan_clicked:
+        if _is_cloud_space():
+            ok_pf, pf_msg = _preflight_polygon_key()
+            if not ok_pf:
+                st.error(pf_msg)
+            else:
+                started, _msg = start_full_scan(selected_profile)
+                if started:
+                    st.session_state["last_scan_profile"] = selected_profile
+                    _rerun_app()
+        else:
+            with st.spinner("סורק…"):
+                ok, output = run_professional_scan_from_dashboard(selected_profile)
+            st.cache_data.clear()
+            if ok:
+                for line in output.splitlines():
+                    if line.startswith("report_file="):
+                        st.session_state["last_scan_report_file"] = line.split("=", 1)[-1].strip()
+                st.session_state["last_scan_profile"] = selected_profile
+                _rerun_app()
+            else:
+                st.error("הסריקה נכשלה.")
+
+    job = get_status()
+    if job.get("state") == "ok" and job.get("report_file"):
+        st.session_state["last_scan_report_file"] = job["report_file"]
+        st.session_state["last_scan_profile"] = job.get("profile", selected_profile)
+
+    st.divider()
+
+
 # =============================================================================
 # Main app
 # =============================================================================
 
 def main() -> None:
-    # --- Header ---
-    st.title("📈 Momentum Decision-Support System")
-    st.caption(
-        "Long-only momentum setups for US stocks and ETFs. "
-        "Decision support only — this system does **not** recommend or place trades."
-    )
-
     # --- Sidebar: report selection ---
     with st.sidebar:
         _render_sidebar_brand()
-
+        _render_cloud_access_panel()
         if os.getenv("ENABLE_DASHBOARD_SCAN_BUTTON", "true").lower() not in {"0", "false", "no"}:
-            from src.scan_profiles import list_profiles, profile_help_markdown
-
-            _render_sidebar_section("סריקה")
-            profiles = list_profiles()
-            profile_labels = {p.id: p.label_he for p in profiles}
-            default_profile = os.getenv("SCAN_PROFILE", "simple")
-            if default_profile not in profile_labels:
-                default_profile = "simple"
-            profile_ids = [p.id for p in profiles]
-            selected_profile = st.selectbox(
-                "רמת סריקה",
-                options=profile_ids,
-                index=profile_ids.index(default_profile),
-                format_func=lambda pid: profile_labels[pid],
-                key="scan_profile_select",
-            )
-            selected = next(p for p in profiles if p.id == selected_profile)
-            st.markdown(
-                f'<span class="sidebar-profile-chip">{html.escape(selected.label_he)}</span>',
-                unsafe_allow_html=True,
-            )
-            st.caption(selected.summary_he)
-            with st.expander("זמנים משוערים ואמינות", expanded=False):
-                st.markdown(profile_help_markdown(selected))
-
-            if st.button("▶ הרץ סריקה חדשה", use_container_width=True, type="primary"):
-                spinner = (
-                    f"מריץ סריקה {selected.label_he}… "
-                    f"(משוער {selected.time_mac_cache_he} עם קאש)"
-                )
-                with st.spinner(spinner):
-                    ok, output = run_professional_scan_from_dashboard(selected_profile)
-                st.cache_data.clear()
-                if ok:
-                    st.success("הסריקה הסתיימה בהצלחה. הדוח עודכן.")
-                    with st.expander("פלט סריקה", expanded=False):
-                        st.text(output)
-                    _rerun_app()
-                else:
-                    st.error("הסריקה נכשלה.")
-                    with st.expander("פלט שגיאה", expanded=True):
-                        st.text(output)
-
-            st.divider()
+            _render_scan_sidebar_panel()
 
         _render_sidebar_section("דוח")
         reports = list_all_reports()
+        csv_path = None
+        selected_date = ""
+        selected_report_type = ""
         if not reports:
-            st.error("No reports found in `data/reports/`.")
-            st.info(
-                "Run `python scripts/run_daily.py` first to generate a report."
+            st.warning("אין דוח עדיין ב-data/reports/")
+            st.caption("לחץ למעלה: ▶ הרץ סריקה מלאה (פעם ראשונה ~15–30 דקות בענן).")
+        else:
+            report_labels = [report_display_label(p) for p in reports]
+            default_report_index = _default_report_index(reports, report_labels)
+            selected_label = st.selectbox(
+                "תאריך דוח",
+                options=report_labels,
+                index=default_report_index,
+                key="report_date_full_scan_default",
             )
-            return
+            main_report_path = reports[report_labels.index(selected_label)]
+            selected_date = selected_label
+            variant_paths = report_variant_paths(main_report_path)
+            available_variants = {
+                label: path for label, path in variant_paths.items()
+                if path.exists()
+            }
+            selected_report_type = st.selectbox(
+                "סוג דוח",
+                options=list(available_variants.keys()),
+                index=0,
+            )
+            csv_path = available_variants[selected_report_type]
 
-        report_choices = {parse_date_from_filename(p): p for p in reports}
-        report_labels = list(report_choices.keys())
-        default_report_index = next(
-            (idx for idx, label in enumerate(report_labels) if "full_us_10" in label),
-            0,
-        )
-        selected_date = st.selectbox(
-            "תאריך דוח",
-            options=report_labels,
-            index=default_report_index,
-            key="report_date_full_scan_default",
-        )
-        main_report_path = report_choices[selected_date]
-        variant_paths = report_variant_paths(main_report_path)
-        available_variants = {
-            label: path for label, path in variant_paths.items()
-            if path.exists()
-        }
-        selected_report_type = st.selectbox(
-            "סוג דוח",
-            options=list(available_variants.keys()),
-            index=0,
-        )
-        csv_path = available_variants[selected_report_type]
+            mtime = datetime.fromtimestamp(csv_path.stat().st_mtime)
+            _render_sidebar_file_card(
+                csv_path.name,
+                csv_path.stat().st_size / 1024,
+                mtime.strftime("%d/%m/%Y %H:%M:%S"),
+            )
 
-        mtime = datetime.fromtimestamp(csv_path.stat().st_mtime)
-        _render_sidebar_file_card(
-            csv_path.name,
-            csv_path.stat().st_size / 1024,
-            mtime.strftime("%d/%m/%Y %H:%M:%S"),
+    if csv_path is None:
+        st.markdown("### אין דוח להצגה עדיין")
+        st.info(
+            "**בענן (Hugging Face):** לחץ בסרגל **▶ הרץ סריקה חדשה** והמתן. "
+            "אם הסריקה נכשלת — העלה קובץ דוח מ-Mac לתיקייה `data/reports/` ב-Files."
         )
+        st.caption(f"תיקיית דוחות: `{REPORTS_DIR}`")
+        return
 
     # --- Load report ---
     csv_stat = csv_path.stat()
@@ -1235,7 +2214,11 @@ def main() -> None:
         )
 
     if "הסתברות %" in df.columns:
-        _render_hebrew_professional_dashboard(df, selected_date, selected_report_type)
+        st.session_state["active_report_filename"] = csv_path.name
+        df, prev_report_date = attach_rank_delta(df, csv_path, load_report_fn=load_report)
+        _render_hebrew_professional_dashboard(
+            df, selected_date, selected_report_type, prev_report_date=prev_report_date
+        )
         return
 
     # --- Sidebar: filters ---
@@ -1514,9 +2497,52 @@ def main() -> None:
     )
 
 
-def _render_hebrew_professional_dashboard(df: pd.DataFrame, selected_date: str, selected_report_type: str) -> None:
+def _render_rank_delta_summary(df: pd.DataFrame, prev_report_date: str) -> None:
+    if not prev_report_date or "שינוי דירוג" not in df.columns:
+        return
+    work = df[df["שינוי דירוג"].astype(str).str.match(r"↑|חדש", na=False)].copy()
+    if "שינוי דירוג מספר" in work.columns:
+        risers = work.sort_values("שינוי דירוג מספר", ascending=False).head(8)
+    else:
+        risers = work.head(8)
+    fallers = df[df["שינוי דירוג"].astype(str).str.startswith("↓", na=False)].copy()
+    if "שינוי דירוג מספר" in fallers.columns:
+        fallers = fallers.sort_values("שינוי דירוג מספר", ascending=True).head(8)
+
+    def _lines(sub: pd.DataFrame) -> str:
+        if sub.empty:
+            return "<span class='small-muted'>אין</span>"
+        parts = []
+        for _, r in sub.iterrows():
+            sym = html.escape(str(r["סימבול"]))
+            d = html.escape(str(r["שינוי דירוג"]))
+            rk = html.escape(str(r.get("דירוג", "")))
+            parts.append(f"<div><strong>{sym}</strong> #{rk} {_rank_delta_badge_html(d)}</div>")
+        return "".join(parts)
+
+    st.markdown(
+        f"""
+        <h3>שינוי דירוג מול {html.escape(prev_report_date)}</h3>
+        <div class="rank-movers-grid">
+            <div class="rank-mover-box"><strong>עלו בדירוג</strong><br/>{_lines(risers)}</div>
+            <div class="rank-mover-box"><strong>ירדו בדירוג</strong><br/>{_lines(fallers)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_hebrew_professional_dashboard(
+    df: pd.DataFrame,
+    selected_date: str,
+    selected_report_type: str,
+    *,
+    prev_report_date: str = "",
+) -> None:
     strategy_state_key = f"selected_strategy_{selected_date}_{selected_report_type}"
     with st.sidebar:
+        st.divider()
+        _render_decision_support_panel(df, prev_report_date=prev_report_date)
         st.divider()
         _render_sidebar_section("סינון תוצאות")
         levels = list(df["רמה"].dropna().unique()) if "רמה" in df.columns else []
@@ -1533,48 +2559,17 @@ def _render_hebrew_professional_dashboard(df: pd.DataFrame, selected_date: str, 
         base_filtered = base_filtered[base_filtered["סימבול"].astype(str).str.upper().str.contains(ticker_filter)]
     base_filtered = base_filtered.sort_values("הסתברות %", ascending=False).reset_index(drop=True)
 
-    st.markdown(
-        f"""
-        <div class="hero-card">
-            <div class="hero-title">סורק לונג מקצועי</div>
-            <div class="hero-subtitle">
-                {selected_date} · דירוג setups לפי דפוס, מגמה, ווליום, אינדיקטורים, פריצה וסיכון
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    col1, col2, col3, col4, col5 = st.columns(5)
-    with col1:
-        st.markdown(metric_card("מניות שנסרקו", str(len(df)), "#3b82f6"), unsafe_allow_html=True)
-    with col2:
-        st.markdown(metric_card("A+ Setup", str((df["רמה"] == "A+ Setup").sum()), "#16a34a"), unsafe_allow_html=True)
-    with col3:
-        st.markdown(metric_card("Watchlist", str((df["רמה"] == "Watchlist").sum()), "#eab308"), unsafe_allow_html=True)
-    with col4:
-        st.markdown(metric_card("Early Momentum", str((df["רמה"] == "Early Momentum").sum()), "#06b6d4"), unsafe_allow_html=True)
-    with col5:
-        best = int(df["הסתברות %"].max()) if not df.empty else 0
-        st.markdown(metric_card("ציון איכות מוביל", f"{best}/100", "#a855f7"), unsafe_allow_html=True)
-        st.caption("זה ציון איכות יחסי, לא הבטחה לטרייד מצליח.")
-
-    if {"מצב שוק", "ציון שוק", "אישור שוק ללונג"}.issubset(df.columns):
-        market_row = df.iloc[0]
-        st.markdown(
-            metric_card(
-                "מצב שוק כללי",
-                f"{market_row['מצב שוק']} · {int(market_row['ציון שוק'])}/100 · {market_row['אישור שוק ללונג']}",
-                "#22c55e" if str(market_row["אישור שוק ללונג"]) == "תומך" else "#f59e0b",
-            ),
-            unsafe_allow_html=True,
-        )
+    report_file = st.session_state.get("active_report_filename", "")
+    _render_institutional_scanner_header(df, selected_date, report_file)
 
     if base_filtered.empty:
         st.info("אין מועמדים שעומדים בסינון הנוכחי.")
         return
 
     st.markdown("---")
+    if prev_report_date:
+        _render_rank_delta_summary(df, prev_report_date)
+        st.markdown("---")
     _render_top_movers_now(base_filtered)
 
     st.markdown("---")
@@ -1615,6 +2610,8 @@ def _render_hebrew_professional_dashboard(df: pd.DataFrame, selected_date: str, 
     with tab_details:
         symbols = filtered["סימבול"].astype(str).tolist()
         selected_symbol = st.selectbox("בחר מניה לפירוט", options=symbols)
+        st.session_state["selected_ticker"] = str(selected_symbol).upper()
+        st.session_state["detail_ticker"] = str(selected_symbol).upper()
         selected_row = filtered[filtered["סימבול"].astype(str) == selected_symbol].iloc[0]
         _render_symbol_details(selected_row)
 
@@ -1649,7 +2646,20 @@ def _render_professional_table_filters(df: pd.DataFrame) -> tuple[pd.DataFrame, 
         only_interesting = row3[4].checkbox("רק מעניינות", value=False, key="pro_table_only_interesting")
 
         row4 = st.columns([1.2, 1, 1])
-        sort_options = [c for c in ["הסתברות %", "ציון מוסדי", "ווליום יחסי", "שינוי %", "דירוג", "הצלחה היסטורית %", "ציון חדשות"] if c in work.columns]
+        sort_options = [
+            c
+            for c in [
+                "הסתברות %",
+                "שינוי דירוג מספר",
+                "ציון מוסדי",
+                "ווליום יחסי",
+                "שינוי %",
+                "דירוג",
+                "הצלחה היסטורית %",
+                "ציון חדשות",
+            ]
+            if c in work.columns
+        ]
         sort_by = row4[0].selectbox("מיין לפי", options=sort_options, index=0 if sort_options else None, key="pro_table_sort_by")
         sort_desc = row4[1].checkbox("גבוה לנמוך", value=True, key="pro_table_sort_desc")
         table_limit = row4[2].selectbox("כמה שורות להציג", options=[40, 80, 150, 300, "הכל"], index=1, key="pro_table_limit")
@@ -1707,9 +2717,24 @@ def _render_dark_professional_table(df: pd.DataFrame, limit: int = 80) -> None:
         return
 
     cols = [
-        "סימבול", "סקטור", "מחיר אחרון", "שינוי %", "ווליום יחסי", "דפוס",
-        "רמה", "ציון", "עוצמת מהלך", "מוסדי", "תג מוסדי",
-        "כניסה", "יעד 1", "יעד 2", "סיכוי יעד 1", "התנגדות קרובה",
+        "סימבול",
+        "דירוג",
+        "שינוי",
+        "סקטור",
+        "מחיר אחרון",
+        "שינוי %",
+        "ווליום יחסי",
+        "דפוס",
+        "רמה",
+        "ציון",
+        "עוצמת מהלך",
+        "מוסדי",
+        "תג מוסדי",
+        "כניסה",
+        "יעד 1",
+        "יעד 2",
+        "סיכוי יעד 1",
+        "התנגדות קרובה",
     ]
     rows_html = []
     for _, row in df.head(limit).iterrows():
@@ -1719,11 +2744,14 @@ def _render_dark_professional_table(df: pd.DataFrame, limit: int = 80) -> None:
         level_color = _level_color(row.get("רמה", ""))
         ticker = str(row.get("סימבול", "")).upper().strip()
         tv_url = _tradingview_url(ticker)
+        rank_delta = str(row.get("שינוי דירוג", "—"))
         rows_html.append(
             "<tr>"
             f"<td><a class='ticker-link' href='{tv_url}' target='_blank' rel='noopener noreferrer'>"
             f"<span class='ticker-cell'>{_cell(ticker)}</span></a><br>"
             f"<span class='small-muted'>{_cell(row.get('מגמה'))}</span></td>"
+            f"<td>{_cell(row.get('דירוג'))}</td>"
+            f"<td>{_rank_delta_badge_html(rank_delta)}</td>"
             f"<td>{_cell(row.get('סקטור'))}</td>"
             f"<td>${_num(row.get('מחיר אחרון'))}</td>"
             f"<td>{_signed(row.get('שינוי %'))}%</td>"
@@ -1764,7 +2792,7 @@ def _render_top_movers_now(df: pd.DataFrame) -> None:
     ranked = df.copy()
     ranked["_heat_score"] = ranked.apply(lambda row: float(_momentum_heat(row)["score"]), axis=1)
     ranked = ranked.sort_values(
-        ["_heat_score", "ציון מוסדי", "הסתברות %", "ווליום יחסי"],
+        ["הסתברות %", "_heat_score", "ציון מוסדי", "ווליום יחסי"],
         ascending=[False, False, False, False],
     ).head(10)
     if ranked.empty:
@@ -1905,7 +2933,10 @@ def _render_chart_cards(df: pd.DataFrame) -> None:
         limit = min(int(count_choice), len(df))
         controls[2].info(f"מוצגים {limit} מתוך {len(df)} כרטיסים מסוננים.")
 
-    top = df.head(limit).reset_index(drop=True)
+    work = df.copy()
+    if "הסתברות %" in work.columns:
+        work = work.sort_values("הסתברות %", ascending=False)
+    top = work.head(limit).reset_index(drop=True)
     for start in range(0, len(top), 2):
         cols = st.columns(2)
         for col, (_, row) in zip(cols, top.iloc[start:start + 2].iterrows()):
@@ -1914,20 +2945,28 @@ def _render_chart_cards(df: pd.DataFrame) -> None:
                 heat = _momentum_heat(row)
                 ticker = str(row["סימבול"]).upper().strip()
                 tv_url = _tradingview_url(ticker)
+                gf_url = html.escape(_google_finance_url(ticker))
+                level = str(row.get("רמה", ""))
+                level_skin = {
+                    "A+ Setup": "chart-card-aplus",
+                    "Watchlist": "chart-card-watch",
+                }.get(level, "")
+                prob = int(row.get("הסתברות %", 0) or 0)
                 st.markdown(
                     f"""
-                    <div class="setup-card momentum-card {heat['card_class']}">
-                        <div class="setup-symbol">
-                            <a class="ticker-link" href="{tv_url}" target="_blank" rel="noopener noreferrer">{_cell(ticker)}</a>
+                    <div class="chart-card-premium momentum-card {heat['card_class']} {level_skin}">
+                        <div class="chart-card-head">
+                            <a class="ticker-link chart-card-symbol" href="{tv_url}" target="_blank" rel="noopener">{_cell(ticker)}</a>
+                            <div class="chart-card-metrics">
+                                <span class="prob-pill" style="background:{_probability_color(prob)};">{prob}%</span>
+                                <span class="setup-badge" style="background:{color};">{_cell(level)}</span>
+                                <span class="momentum-badge {heat['class']}">{_cell(heat['label'])}</span>
+                            </div>
                         </div>
-                        <span class="setup-badge" style="background:{color};">
-                            {row['רמה']} · {int(row['הסתברות %'])}%
-                        </span>
-                        <span class="momentum-badge {heat['class']}">{_cell(heat['label'])}</span>
-                        <div class="setup-text">
-                            {timeframe} · {row['דפוס']}<br/>
-                            {row['מצב פריצה']}<br/>
-                            כניסה: ${float(row['נקודת כניסה']):.2f}
+                        <div class="chart-card-meta">
+                            {timeframe} · {_cell(row.get('דפוס'))} · RVOL {_num(row.get('ווליום יחסי'))}x<br/>
+                            {_cell(row.get('מצב פריצה'))} · כניסה ${_num(row.get('נקודת כניסה'))} · יעד ${_num(row.get('יעד ראשון'))}<br/>
+                            <a class="ticker-link" href="{gf_url}" target="_blank" rel="noopener">Google Finance ↗</a>
                         </div>
                     </div>
                     """,
@@ -1958,7 +2997,7 @@ def _render_strategy_breakdown(df: pd.DataFrame, state_key: str) -> str | None:
     summary_rows = []
     for pattern, group in work.groupby("דפוס", dropna=False):
         ranked = group.sort_values(
-            [c for c in ["ציון מוסדי", "הסתברות %", "סיכוי למהלך %", "ווליום יחסי"] if c in group.columns],
+            [c for c in ["הסתברות %", "ציון מוסדי", "סיכוי למהלך %", "ווליום יחסי"] if c in group.columns],
             ascending=False,
         )
         summary_rows.append({
@@ -1974,7 +3013,7 @@ def _render_strategy_breakdown(df: pd.DataFrame, state_key: str) -> str | None:
 
     summary = pd.DataFrame(summary_rows)
     summary = summary.sort_values(
-        ["A+", "ציון מוסדי ממוצע", "ציון ממוצע", "RVOL ממוצע"],
+        ["A+", "ציון ממוצע", "ציון מוסדי ממוצע", "RVOL ממוצע"],
         ascending=[False, False, False, False],
     ).reset_index(drop=True)
     summary.insert(0, "דירוג", range(1, len(summary) + 1))
@@ -2082,6 +3121,7 @@ def _render_symbol_details(row: pd.Series) -> None:
     color = _level_color(row.get("רמה", ""))
     heat = _momentum_heat(row)
     ticker = str(row["סימבול"]).upper().strip()
+    st.session_state["last_ticker"] = ticker
     tv_url = _tradingview_url(ticker)
     st.markdown(
         f"""
@@ -2098,6 +3138,13 @@ def _render_symbol_details(row: pd.Series) -> None:
         """,
         unsafe_allow_html=True,
     )
+    if "שינוי דירוג" in row.index:
+        c_rank = st.columns(3)
+        c_rank[0].metric("דירוג היום", str(row.get("דירוג", "—")))
+        c_rank[1].metric("דירוג אתמול", str(row.get("דירוג אתמול", "—")) or "—")
+        c_rank[2].markdown(f"**שינוי:** {_rank_delta_badge_html(str(row.get('שינוי דירוג', '—')))}", unsafe_allow_html=True)
+    st.markdown("#### יעוץ לפי הנתונים")
+    _render_ticker_advice_card(row)
     st.link_button("פתח גרף ב-TradingView", tv_url, use_container_width=True)
     _render_tradingview_style_chart(row["גרף קטן"], height=320)
     c1, c2, c3, c4 = st.columns(4)
