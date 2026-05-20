@@ -420,8 +420,9 @@ def _analyze_ticker(
     def _env_on(name: str) -> bool:
         return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
+    skip_all_sparklines = _env_on("SCAN_SKIP_SPARKLINES")
     compact_charts = _env_on("SCAN_FAST_CHARTS") or _env_on("SCAN_FAST")
-    skip_weekly = _env_on("SCAN_SKIP_WEEKLY_SPARKLINES")
+    skip_weekly = _env_on("SCAN_SKIP_WEEKLY_SPARKLINES") or skip_all_sparklines
     technicals = _technical_state(df)
 
     score = 0
@@ -597,8 +598,8 @@ def _analyze_ticker(
         time_to_targets=trade_plan["time_to_targets"],
         risk_note=_risk_note(score, extended, snap.rvol_20),
         wait_for=f"לחכות לפריצה מעל ${entry:.2f} עם ווליום יחסי מעל 1.5x ונר שסוגר חזק.",
-        sparkline=_daily_sparkline(df, bars=40 if compact_charts else 80),
-        daily_sparkline=_daily_sparkline(df, bars=40 if compact_charts else 80),
+        sparkline="[]" if skip_all_sparklines else _daily_sparkline(df, bars=40 if compact_charts else 80),
+        daily_sparkline="[]" if skip_all_sparklines else _daily_sparkline(df, bars=40 if compact_charts else 80),
         weekly_sparkline="[]" if skip_weekly else _weekly_sparkline(df),
         hourly_sparkline="[]",
     )

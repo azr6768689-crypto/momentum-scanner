@@ -92,7 +92,7 @@ def _default_workers() -> int:
     provider = os.getenv("DATA_PROVIDER", "demo").lower()
     cpu = os.cpu_count() or 4
     if os.getenv("RENDER", "").lower() == "true" or os.getenv("SPACE_ID"):
-        return 8 if provider in {"demo", "tiingo"} else 4
+        return 16 if provider in {"demo", "tiingo"} else 6
     return min(32, max(8, cpu * 2))
 
 
@@ -265,7 +265,7 @@ def _load_universe_parallel(
             if df is not None and snap is not None:
                 universe[ticker] = df
                 snapshots[ticker] = snap
-            if done == 1 or done % 25 == 0 or done == total:
+            if done == 1 or done % 100 == 0 or done == total:
                 stocks_done = min(done, universe_size)
                 log.info(
                     "Loaded %d/%d universe stocks (%d usable)",
@@ -362,7 +362,10 @@ def main() -> int:
         tickers = tickers[:args.limit]
 
     end = date.today()
-    start = end - timedelta(days=int(settings.data.history_years * 365.25))
+    if trim_bars:
+        start = end - timedelta(days=max(int(trim_bars * 1.6) + 40, 200))
+    else:
+        start = end - timedelta(days=int(settings.data.history_years * 365.25))
     universe: dict[str, pd.DataFrame] = {}
     snapshots = {}
 

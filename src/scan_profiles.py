@@ -46,11 +46,11 @@ PROFILES: dict[str, ScanProfile] = {
         time_mac_cold_he="כ־15–25 דקות (פעם ראשונה / קאש פג)",
         time_colab_cache_he="כ־30–60 שניות",
         time_colab_cold_he="כ־20–40 דקות (פעם ראשונה ב-Drive)",
-        time_hf_cache_he="כ־2–5 דקות",
-        time_hf_cold_he="כ־5–12 דקות (ענן / demo)",
+        time_hf_cache_he="כ־1–3 דקות",
+        time_hf_cold_he="כ־2–4 דקות (ענן / demo)",
         fast_parallel=True,
         skip_per_ticker_backtest=True,
-        trim_bars=252,
+        trim_bars=126,
         intraday_top=0,
         news_top=0,
         skip_weekly_sparklines=True,
@@ -135,6 +135,7 @@ def apply_profile_to_env(profile: ScanProfile) -> None:
     os.environ["SCAN_FAST_CHARTS"] = "1" if profile.id == "simple" else "0"
     os.environ["SCAN_SKIP_BACKTEST"] = "1" if profile.skip_per_ticker_backtest else "0"
     os.environ["SCAN_SKIP_WEEKLY_SPARKLINES"] = "1" if profile.skip_weekly_sparklines else "0"
+    os.environ["SCAN_SKIP_SPARKLINES"] = "1" if profile.id == "simple" else "0"
     if profile.trim_bars is not None:
         os.environ["SCAN_TRIM_BARS"] = str(profile.trim_bars)
     else:

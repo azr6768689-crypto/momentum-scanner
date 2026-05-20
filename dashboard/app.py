@@ -365,7 +365,9 @@ def _render_sidebar_scan_hub() -> None:
 
     provider = os.getenv("DATA_PROVIDER", "demo")
     st.markdown("### סריקה")
-    st.caption(f"{_deploy_build_label()} · {provider}")
+    st.caption(f"{_deploy_build_label()} · {provider} · workers {os.getenv('SCAN_WORKERS', '16')}")
+    if provider not in ("demo",) and _is_cloud_space():
+        st.caption("למהירות: DATA_PROVIDER=demo בענן (ללא API)")
 
     state = _cloud_scan_state()
     if state == "running":

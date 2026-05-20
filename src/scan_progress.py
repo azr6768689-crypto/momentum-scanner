@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
+
+_last_disk_write = 0.0
 
 ROOT = Path(__file__).resolve().parent.parent
 PROGRESS_PATH = ROOT / "data" / "reports" / ".scan_progress.json"
@@ -29,6 +32,11 @@ def write_progress(
         "profile_id": profile_id,
         "profile_label": profile_label,
     }
+    global _last_disk_write
+    now = time.time()
+    if 0 < int(percent) < 100 and now - _last_disk_write < 1.5:
+        return
+    _last_disk_write = now
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
