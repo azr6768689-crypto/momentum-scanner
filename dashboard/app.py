@@ -288,19 +288,14 @@ def _render_scan_assistant_links() -> None:
 
 
 def _render_cloud_access_panel() -> None:
-    """Shareable link — current deployment only (Render or HF)."""
-    url = _public_app_url()
-    on_render = os.getenv("RENDER", "").strip().lower() == "true"
-    with st.expander("🔗 גישה מכל מחשב", expanded=False):
-        st.link_button("פתח את הסורק", url, use_container_width=True)
-        st.text_input("העתק קישור", value=url, label_visibility="collapsed", key="cloud_access_url_copy")
-        if not on_render:
-            hf_direct = (os.getenv("PUBLIC_APP_URL", "") or CLOUD_APP_URL).strip().rstrip("/")
-            hf_page = (os.getenv("PUBLIC_SPACE_PAGE_URL", "") or CLOUD_SPACE_PAGE_URL).strip().rstrip("/")
-            if hf_direct and hf_direct != url:
-                st.link_button("Hugging Face (ישיר)", hf_direct, use_container_width=True)
-            if hf_page:
-                st.link_button("דף Space ב-HF", hf_page, use_container_width=True)
+    """Two share links only — Render + Hugging Face."""
+    render_url = (
+        os.getenv("RENDER_EXTERNAL_URL", "").strip()
+        or "https://momentum-scanner-bbhl.onrender.com"
+    ).rstrip("/")
+    hf_url = (os.getenv("ALTERNATE_APP_URL", "") or CLOUD_APP_URL).strip().rstrip("/")
+    st.link_button("Render", render_url, use_container_width=True)
+    st.link_button("Hugging Face", hf_url, use_container_width=True)
 
 
 def _rank_delta_badge_html(delta: str) -> str:
@@ -1904,6 +1899,16 @@ def _scan_coverage_stats(df: pd.DataFrame) -> tuple[int, int, float]:
     return expected, usable or rows, coverage
 
 
+def _preflight_polygon_key_cached() -> tuple[bool, str]:
+    """Cached Polygon check — avoids HTTP on every sidebar rerun."""
+    cache = st.session_state.get("_polygon_preflight_cache")
+    if isinstance(cache, dict) and cache.get("ok") is not None:
+        return bool(cache["ok"]), str(cache.get("msg", ""))
+    ok, msg = _preflight_polygon_key()
+    st.session_state["_polygon_preflight_cache"] = {"ok": ok, "msg": msg}
+    return ok, msg
+
+
 def _auto_scan_on_entry_enabled() -> bool:
     return os.getenv("AUTO_SCAN_ON_ENTRY", "true").lower() not in {"0", "false", "no"}
 
@@ -1935,47 +1940,18 @@ def _maybe_auto_scan_on_entry(profile_id: str) -> None:
 
 def _render_cloud_scan_progress() -> None:
     from src.cloud_scan_job import get_scan_progress, get_status
-    from src.scan_profiles import get_profile
 
     job = get_status()
     state = job.get("state", "idle")
     if state == "idle":
         return
     prog = job.get("progress") or get_scan_progress()
-    profile_label = str(prog.get("profile_label") or job.get("profile_label") or "")
-    profile_id = str(prog.get("profile_id") or job.get("profile") or "")
-    if not profile_label and profile_id:
-        try:
-            profile_label = get_profile(profile_id).label_he
-        except Exception:
-            profile_label = ""
-
     pct = min(1.0, max(0.0, int(prog.get("percent", 0)) / 100.0))
-    label = html.escape(str(prog.get("message") or prog.get("phase") or "סריקה…"))
-    total = int(prog.get("total", 0) or _expected_universe_size())
-    if profile_label:
-        st.markdown(
-            f'<div class="scan-progress-profile">{html.escape(profile_label)}</div>',
-            unsafe_allow_html=True,
-        )
-    st.markdown(
-        f'<div class="scan-progress-label">{label} · {int(pct * 100)}%</div>',
-        unsafe_allow_html=True,
-    )
     st.progress(pct)
-    done = int(prog.get("done", 0))
-    if total:
-        st.caption(f"{done:,} / {total:,} מניות")
     if state == "ok":
-        st.success(f"הושלם · {job.get('coverage_pct', '—')}%")
         _maybe_reload_after_scan_ok()
     elif state == "error":
-        msg = str(job.get("message", "שגיאה"))
-        st.error(msg)
-        log_tail = str(job.get("log", "") or "").strip()
-        if log_tail:
-            with st.expander("לוג", expanded=False):
-                st.code(log_tail[-4000:])
+        st.error(str(job.get("message", "שגיאה")))
 
 
 def _render_institutional_scanner_header(
@@ -2182,17 +2158,13 @@ def _render_scan_sidebar_panel() -> None:
     selected = next(p for p in profiles if p.id == selected_profile)
 
     cloud = _is_cloud_space()
-    if cloud:
-        ok_pf, pf_msg = _preflight_polygon_key()
-        if not ok_pf:
-            st.error(pf_msg)
     from src.cloud_scan_job import get_status, start_full_scan
 
     _maybe_auto_scan_on_entry(selected_profile)
     _render_cloud_scan_progress()
     job = get_status()
     if cloud and job.get("state") == "running" and hasattr(st, "autorefresh"):
-        st.autorefresh(interval=12_000, key="cloud_scan_progress_poll")
+        st.autorefresh(interval=20_000, key="cloud_scan_progress_poll")
 
     scan_clicked = st.button(
         f"▶ סריקה — {selected.label_he}",
@@ -2201,13 +2173,14 @@ def _render_scan_sidebar_panel() -> None:
     )
     if scan_clicked:
         if _is_cloud_space():
-            ok_pf, pf_msg = _preflight_polygon_key()
+            ok_pf, pf_msg = _preflight_polygon_key_cached()
             if not ok_pf:
                 st.error(pf_msg)
             else:
                 started, _msg = start_full_scan(selected_profile)
                 if started:
                     st.session_state["last_scan_profile"] = selected_profile
+                    st.session_state.pop("_polygon_preflight_cache", None)
                     _rerun_app()
         else:
             with st.spinner("סורק…"):
