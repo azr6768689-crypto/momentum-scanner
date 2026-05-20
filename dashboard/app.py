@@ -42,6 +42,7 @@ sys.path.insert(0, str(ROOT))
 from src.env_secrets import clean_env_secret
 from src.polygon_key_store import (
     clear_polygon_api_key_file,
+    polygon_key_source,
     polygon_key_tail,
     resolve_polygon_api_key,
     save_polygon_api_key,
@@ -297,12 +298,18 @@ def _render_polygon_key_setup() -> None:
     st.error(pf_msg)
     stored = resolve_polygon_api_key()
     if stored:
-        st.caption(f"מפתח שמור כרגע: …{polygon_key_tail(stored)} ({len(stored)} תווים)")
+        st.caption(
+            f"מקור: **{polygon_key_source()}** · …{polygon_key_tail(stored)} · {len(stored)} תווים"
+        )
+    if _is_cloud_space():
+        st.warning(
+            "אם עדכנת מפתח רק ב-Render Environment — הוא **עדיין דורס** את מה ששמרת כאן. "
+            "חובה ללחוץ **שמור מפתח** בשדה למטה (או למחוק את POLYGON_API_KEY ב-Render)."
+        )
     st.info(
-        "1. היכנס ל-[polygon.io/dashboard/api-keys](https://polygon.io/dashboard/api-keys)\n"
-        "2. לחץ **+ New Key** → שם כלשהו → **Copy**\n"
-        "3. הדבק כאן **רק** את המפתח (30+ תווים, בלי מרכאות)\n"
-        "4. **לא** Publishable / לא GitHub / לא HF"
+        "1. [polygon.io/dashboard/api-keys](https://polygon.io/dashboard/api-keys) → **+ New Key** → Copy\n"
+        "2. הדבק למטה → **שמור מפתח** (חייב להופיע ירוק)\n"
+        "3. מפתח ארוך (30+ תווים), בלי מרכאות"
     )
     new_key = st.text_input("הדבק מפתח Polygon", type="password", key="polygon_key_paste")
     c1, c2 = st.columns(2)
@@ -2095,11 +2102,21 @@ def _scan_coverage_stats(df: pd.DataFrame) -> tuple[int, int, float]:
 
 def _preflight_polygon_key_cached() -> tuple[bool, str]:
     """Cached Polygon check — avoids HTTP on every sidebar rerun."""
+    active = resolve_polygon_api_key()
+    tail = polygon_key_tail(active) if active else ""
     cache = st.session_state.get("_polygon_preflight_cache")
-    if isinstance(cache, dict) and cache.get("ok") is not None:
+    if (
+        isinstance(cache, dict)
+        and cache.get("ok") is not None
+        and cache.get("key_tail") == tail
+    ):
         return bool(cache["ok"]), str(cache.get("msg", ""))
-    ok, msg = _preflight_polygon_key()
-    st.session_state["_polygon_preflight_cache"] = {"ok": ok, "msg": msg}
+    ok, msg = validate_polygon_api_key(active)
+    st.session_state["_polygon_preflight_cache"] = {
+        "ok": ok,
+        "msg": msg,
+        "key_tail": tail,
+    }
     return ok, msg
 
 

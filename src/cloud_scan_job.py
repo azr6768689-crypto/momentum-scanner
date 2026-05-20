@@ -128,6 +128,13 @@ def start_full_scan(profile_id: str = "simple") -> tuple[bool, str]:
 
     log_file = open(LOG_PATH, "w", encoding="utf-8")
     env = os.environ.copy()
+    from src.polygon_key_store import resolve_polygon_api_key
+
+    polygon_key = resolve_polygon_api_key()
+    if polygon_key:
+        env["POLYGON_API_KEY"] = polygon_key
+        env["MASSIVE_API_KEY"] = polygon_key
+        env["DATA_PROVIDER"] = "polygon"
     env["SCAN_PROGRESS_PATH"] = str(ROOT / "data" / "reports" / ".scan_progress.json")
     try:
         proc = subprocess.Popen(
