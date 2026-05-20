@@ -1642,6 +1642,75 @@ def list_all_reports() -> list[Path]:
     return sorted(paths, key=lambda path: path.stat().st_mtime, reverse=True)
 
 
+def _report_path_from_job() -> Path | None:
+    """Resolve report CSV from cloud scan job / session (when glob misses a fresh file)."""
+    names: list[str] = []
+    try:
+        from src.cloud_scan_job import get_status
+
+        job = get_status()
+        if job.get("report_file"):
+            names.append(str(job["report_file"]))
+    except Exception:
+        pass
+    pref = st.session_state.get("last_scan_report_file", "")
+    if pref:
+        names.append(str(pref))
+    seen: set[str] = set()
+    for raw in names:
+        name = Path(raw).name
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        path = REPORTS_DIR / name
+        if path.is_file() and path.stat().st_size > 0:
+            return path
+    return None
+
+
+def _discover_report_paths() -> list[Path]:
+    """Official reports plus any job-indicated file not yet in the official list."""
+    reports = list_all_reports()
+    extra = _report_path_from_job()
+    if extra and extra not in reports:
+        reports = [extra] + reports
+    return reports
+
+
+def _maybe_reload_after_scan_ok() -> None:
+    """Once per completed scan: clear cache and rerun so the new CSV appears in the UI."""
+    try:
+        from src.cloud_scan_job import get_status
+
+        job = get_status()
+    except Exception:
+        return
+    if job.get("state") != "ok" or not job.get("report_file"):
+        return
+    rid = f"{job.get('report_file')}:{job.get('profile', '')}"
+    if st.session_state.get("scan_ok_reloaded_for") == rid:
+        return
+    st.session_state["scan_ok_reloaded_for"] = rid
+    st.session_state["last_scan_report_file"] = job["report_file"]
+    st.cache_data.clear()
+    _rerun_app()
+
+
+def _sidebar_selector(label: str, options: list, *, index: int, key: str, format_func=None):
+    """Use radio on Render — avoids Streamlit Selectbox chunk load failures in some browsers."""
+    if os.getenv("RENDER", "").lower() == "true" and len(options) <= 8:
+        labels = [format_func(o) if format_func else str(o) for o in options]
+        choice = st.radio(label, options=labels, index=min(index, len(labels) - 1), key=key)
+        return options[labels.index(choice)]
+    return st.selectbox(
+        label,
+        options=options,
+        index=index,
+        format_func=format_func,
+        key=key,
+    )
+
+
 def run_professional_scan_from_dashboard(profile_id: str) -> tuple[bool, str]:
     from src.scan_profiles import apply_profile_to_env, get_profile
 
@@ -1926,6 +1995,10 @@ def _render_cloud_scan_progress() -> None:
         st.caption(f"{done:,} / {total:,} מניות")
     if state == "ok":
         st.success(f"הושלם · כיסוי דאטה {job.get('coverage_pct', '—')}%")
+        rf = job.get("report_file")
+        if rf:
+            st.caption(f"דוח: `{rf}`")
+        _maybe_reload_after_scan_ok()
     elif state == "error":
         msg = str(job.get("message", "שגיאה"))
         st.error(msg)
@@ -2134,12 +2207,12 @@ def _render_scan_sidebar_panel() -> None:
     if default_profile not in profile_labels:
         default_profile = "simple"
     profile_ids = [p.id for p in profiles]
-    selected_profile = st.selectbox(
+    selected_profile = _sidebar_selector(
         "רמת סריקה",
-        options=profile_ids,
+        profile_ids,
         index=profile_ids.index(default_profile),
-        format_func=lambda pid: profile_labels[pid],
         key="scan_profile_select",
+        format_func=lambda pid: profile_labels[pid],
     )
     selected = next(p for p in profiles if p.id == selected_profile)
 
@@ -2210,19 +2283,26 @@ def main() -> None:
             _render_scan_sidebar_panel()
 
         _render_sidebar_section("דוח")
-        reports = list_all_reports()
+        reports = _discover_report_paths()
         csv_path = None
         selected_date = ""
         selected_report_type = ""
         if not reports:
+            job_path = _report_path_from_job()
+            if job_path:
+                reports = [job_path]
+        if not reports:
             st.warning("אין דוח עדיין ב-data/reports/")
             st.caption("לחץ למעלה: ▶ הרץ סריקה מלאה (פעם ראשונה ~15–30 דקות בענן).")
+            if st.button("🔄 רענן דף", key="refresh_no_report"):
+                st.cache_data.clear()
+                _rerun_app()
         else:
             report_labels = [report_display_label(p) for p in reports]
             default_report_index = _default_report_index(reports, report_labels)
-            selected_label = st.selectbox(
+            selected_label = _sidebar_selector(
                 "תאריך דוח",
-                options=report_labels,
+                report_labels,
                 index=default_report_index,
                 key="report_date_full_scan_default",
             )
@@ -2233,10 +2313,11 @@ def main() -> None:
                 label: path for label, path in variant_paths.items()
                 if path.exists()
             }
-            selected_report_type = st.selectbox(
+            selected_report_type = _sidebar_selector(
                 "סוג דוח",
-                options=list(available_variants.keys()),
+                list(available_variants.keys()),
                 index=0,
+                key="report_type_select",
             )
             csv_path = available_variants[selected_report_type]
 
@@ -2249,10 +2330,19 @@ def main() -> None:
 
     if csv_path is None:
         st.markdown("### אין דוח להצגה עדיין")
+        job_path = _report_path_from_job()
+        if job_path:
+            st.warning(
+                f"נמצא קובץ דוח `{job_path.name}` אבל לא נטען — לחץ **רענן דף** "
+                "או Deploy latest ב-Render."
+            )
+            if st.button("🔄 טען דוח", key="force_load_report", type="primary"):
+                st.session_state["last_scan_report_file"] = job_path.name
+                st.cache_data.clear()
+                _rerun_app()
         st.info(
-            "**בענן (Render / Hugging Face):** בסרגל **▶ סריקה** — בחר **פשוטה**, לחץ סריקה "
-            "והמתן **15–30 דק** (השאר את הדף פתוח). "
-            "אם נכשל: Render → **Environment** → `POLYGON_API_KEY`; ב-Logs חפש Killed/OOM."
+            "**בענן (Render):** אם הסריקה הסתיימה (100%) ועדיין ריק — **רענן את הדף** (F5). "
+            "שגיאת Selectbox בדפדפן: נסה Chrome / חלון פרטי."
         )
         st.caption(f"תיקיית דוחות: `{REPORTS_DIR}`")
         return
