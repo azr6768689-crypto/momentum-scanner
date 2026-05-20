@@ -60,8 +60,23 @@ BRAND_HE = "סורק הזהב"
 BRAND_EN = "Golden Scanner"
 LOGO_MARK = "GS"
 CLOUD_APP_URL = "https://azr6768689-momentum-scanner.hf.space"
-# Same Space on Hugging Face (works when logged in; use if *.hf.space returns 404).
 CLOUD_SPACE_PAGE_URL = "https://huggingface.co/spaces/azr6768689/momentum-scanner"
+# Render sets RENDER_EXTERNAL_URL automatically (e.g. https://momentum-scanner-bbhl.onrender.com).
+
+
+def _public_app_url() -> str:
+    """Shareable app URL — Render/HF aware (not a broken default hf.space on Render)."""
+    explicit = os.getenv("PUBLIC_APP_URL", "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    render_url = os.getenv("RENDER_EXTERNAL_URL", "").strip()
+    if render_url:
+        return render_url.rstrip("/")
+    if os.getenv("RENDER", "").strip().lower() == "true":
+        svc = os.getenv("RENDER_SERVICE_NAME", "momentum-scanner").strip()
+        if svc:
+            return f"https://{svc}.onrender.com"
+    return CLOUD_APP_URL.rstrip("/")
 
 
 def _is_cloud_space() -> bool:
@@ -273,61 +288,19 @@ def _render_scan_assistant_links() -> None:
 
 
 def _render_cloud_access_panel() -> None:
-    """Shareable link + short instructions for email / any device."""
-    url = os.getenv("PUBLIC_APP_URL", CLOUD_APP_URL).strip() or CLOUD_APP_URL
-    space_page = (os.getenv("PUBLIC_SPACE_PAGE_URL", "") or CLOUD_SPACE_PAGE_URL).strip()
-    # Optional: second deployment (e.g. Render) when HF/Caddy domains are blocked on filtered ISPs.
-    alt_url = os.getenv("ALTERNATE_APP_URL", "").strip()
-    with st.expander("🔗 גישה מכל מחשב", expanded=True):
-        st.markdown("**קישור ישיר לאפליקציה (מומלץ לשיתוף)**")
-        st.markdown(
-            f'<a class="cloud-access-url" href="{html.escape(url)}" target="_blank" rel="noopener">'
-            f"{html.escape(url)}</a>",
-            unsafe_allow_html=True,
-        )
+    """Shareable link — current deployment only (Render or HF)."""
+    url = _public_app_url()
+    on_render = os.getenv("RENDER", "").strip().lower() == "true"
+    with st.expander("🔗 גישה מכל מחשב", expanded=False):
+        st.link_button("פתח את הסורק", url, use_container_width=True)
         st.text_input("העתק קישור", value=url, label_visibility="collapsed", key="cloud_access_url_copy")
-        if alt_url:
-            st.markdown(
-                "**קישור חלופי (למשל Render — מתאים כש־Hugging Face או `*.hf.space` חסומים ברשת)**"
-            )
-            st.markdown(
-                f'<a class="cloud-access-url" href="{html.escape(alt_url)}" target="_blank" rel="noopener">'
-                f"{html.escape(alt_url)}</a>",
-                unsafe_allow_html=True,
-            )
-            st.text_input(
-                "העתק קישור חלופי",
-                value=alt_url,
-                label_visibility="collapsed",
-                key="cloud_alt_url_copy",
-            )
-        if space_page:
-            st.markdown("**קישור לדף ה-Space ב-Hugging Face** (אם הקישור הישיר לא נפתח)")
-            st.markdown(
-                f'<a class="cloud-access-url" href="{html.escape(space_page)}" target="_blank" rel="noopener">'
-                f"{html.escape(space_page)}</a>",
-                unsafe_allow_html=True,
-            )
-            st.text_input(
-                "העתק דף Space",
-                value=space_page,
-                label_visibility="collapsed",
-                key="cloud_space_page_copy",
-            )
-        st.info(
-            "**בלי חשבון Hugging Face:** בדף ה-Space בחר **Public** (Settings → Visibility). "
-            "אז הקישור הישיר נפתח לכולם; נדרשת רק **סיסמת האפליקציה** (`DASHBOARD_PASSWORD`)."
-        )
-        st.warning(
-            "**נטפרי / סינון:** לעיתים חוסמים את `huggingface.co` ו־`*.hf.space`. "
-            "אפשרויות: פניה לנטפרי להלבנת הכתובות, גלישה מ־**נייד** (לא דרך Wi‑Fi מסונן), "
-            "או אירוח נוסף — למשל **Render** (`DEPLOY_RENDER_HE.md`) והגדרה ב-Secrets של "
-            "`ALTERNATE_APP_URL` עם כתובת השירות מ־Render."
-        )
-        st.caption(
-            "אם מופיע **404**, ריק, או \"Application error\": ודא ש־**Public**, שהבנייה ב־HF הצליחה, "
-            "ושה-Secrets מלאים. בכניסה לאפליקציה הזן את `DASHBOARD_PASSWORD`."
-        )
+        if not on_render:
+            hf_direct = (os.getenv("PUBLIC_APP_URL", "") or CLOUD_APP_URL).strip().rstrip("/")
+            hf_page = (os.getenv("PUBLIC_SPACE_PAGE_URL", "") or CLOUD_SPACE_PAGE_URL).strip().rstrip("/")
+            if hf_direct and hf_direct != url:
+                st.link_button("Hugging Face (ישיר)", hf_direct, use_container_width=True)
+            if hf_page:
+                st.link_button("דף Space ב-HF", hf_page, use_container_width=True)
 
 
 def _rank_delta_badge_html(delta: str) -> str:
@@ -1994,23 +1967,15 @@ def _render_cloud_scan_progress() -> None:
     if total:
         st.caption(f"{done:,} / {total:,} מניות")
     if state == "ok":
-        st.success(f"הושלם · כיסוי דאטה {job.get('coverage_pct', '—')}%")
-        rf = job.get("report_file")
-        if rf:
-            st.caption(f"דוח: `{rf}`")
+        st.success(f"הושלם · {job.get('coverage_pct', '—')}%")
         _maybe_reload_after_scan_ok()
     elif state == "error":
         msg = str(job.get("message", "שגיאה"))
         st.error(msg)
         log_tail = str(job.get("log", "") or "").strip()
         if log_tail:
-            with st.expander("פרטי שגיאה (לוג)", expanded=True):
+            with st.expander("לוג", expanded=False):
                 st.code(log_tail[-4000:])
-        if os.getenv("RENDER", "").lower() == "true":
-            st.caption(
-                "Render Free: השאר את הטאב פתוח בזמן סריקה (~20 דק). "
-                "ב-Logs של Render חפש Killed/OOM. ודא POLYGON_API_KEY ב-Environment."
-            )
 
 
 def _render_institutional_scanner_header(
@@ -2234,11 +2199,6 @@ def _render_scan_sidebar_panel() -> None:
         use_container_width=True,
         type="primary",
     )
-    if cloud and os.getenv("RENDER", "").lower() == "true":
-        st.caption(
-            "Render Free: סריקה **פשוטה** ~15–30 דק. השאר את הדף פתוח. "
-            f"Workers: {_cloud_scan_workers()} (מ-Environment)."
-        )
     if scan_clicked:
         if _is_cloud_space():
             ok_pf, pf_msg = _preflight_polygon_key()
@@ -2292,8 +2252,7 @@ def main() -> None:
             if job_path:
                 reports = [job_path]
         if not reports:
-            st.warning("אין דוח עדיין ב-data/reports/")
-            st.caption("לחץ למעלה: ▶ הרץ סריקה מלאה (פעם ראשונה ~15–30 דקות בענן).")
+            st.warning("אין דוח עדיין")
             if st.button("🔄 רענן דף", key="refresh_no_report"):
                 st.cache_data.clear()
                 _rerun_app()
