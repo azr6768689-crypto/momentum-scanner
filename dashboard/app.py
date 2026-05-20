@@ -293,9 +293,41 @@ def _scan_panel_enabled() -> bool:
     return os.getenv("ENABLE_DASHBOARD_SCAN_BUTTON", "true").lower() not in {"0", "false", "no"}
 
 
+def _deploy_build_label() -> str:
+    version_path = ROOT / "DEPLOY_VERSION.txt"
+    if version_path.is_file():
+        return version_path.read_text(encoding="utf-8").strip()
+    return "local-dev"
+
+
 def _init_scan_ui_state() -> None:
-    """Scan drawer open by default on first visit."""
-    st.session_state.setdefault("scan_panel_open", True)
+    """Scan drawer closed by default — edge tab opens it."""
+    st.session_state.setdefault("scan_panel_open", False)
+
+
+def _render_status_banner() -> None:
+    """Build label + one clear Polygon / scan status message."""
+    st.caption(f"גרסה: {_deploy_build_label()}")
+    err = st.session_state.get("polygon_scan_error")
+    if err:
+        st.error(
+            f"{err} · Render → Environment → **POLYGON_API_KEY** → הדבק מפתח חדש מ-polygon.io"
+        )
+        return
+    if _is_cloud_space():
+        try:
+            from src.cloud_scan_job import get_scan_progress, get_status
+
+            job = get_status()
+            state = job.get("state", "idle")
+            if state == "running":
+                prog = job.get("progress") or get_scan_progress()
+                pct = int(prog.get("percent", 0))
+                st.info(f"סריקה אוטומטית רצה… {pct}%")
+            elif state == "error":
+                st.error(str(job.get("message", "שגיאה בסריקה")))
+        except Exception:
+            pass
 
 
 def _default_scan_profile_id() -> str:
@@ -313,7 +345,12 @@ def _handle_cloud_scan_lifecycle() -> None:
     """Auto-scan, polling, and report reload — always active (not tied to panel visibility)."""
     if not _is_cloud_space():
         return
-    _maybe_auto_scan_on_entry(_default_scan_profile_id())
+    ok_pf, pf_msg = _preflight_polygon_key_cached()
+    if not ok_pf:
+        st.session_state["polygon_scan_error"] = pf_msg
+    else:
+        st.session_state.pop("polygon_scan_error", None)
+        _maybe_auto_scan_on_entry(_default_scan_profile_id())
     _maybe_reload_after_scan_ok()
     try:
         from src.cloud_scan_job import get_status
@@ -324,12 +361,12 @@ def _handle_cloud_scan_lifecycle() -> None:
 
 
 def _render_scan_drawer_tab() -> None:
-    """Fixed edge tab + vertical rail — toggles the scan panel in the sidebar."""
+    """Fixed edge rail + square tab (Streamlit :has selector) toggles sidebar scan panel."""
     if not _scan_panel_enabled():
         return
 
-    is_open = st.session_state.get("scan_panel_open", True)
-    rail_active = ""
+    is_open = st.session_state.get("scan_panel_open", False)
+    rail_fill = ""
     if _is_cloud_space():
         try:
             from src.cloud_scan_job import get_scan_progress, get_status
@@ -338,8 +375,9 @@ def _render_scan_drawer_tab() -> None:
             if job.get("state") == "running":
                 prog = job.get("progress") or get_scan_progress()
                 pct = max(5, min(100, int(prog.get("percent", 0))))
-                rail_active = (
-                    f'<div class="scan-drawer-rail-fill" style="height:{pct}%;"></div>'
+                rail_fill = (
+                    f'<div style="position:absolute;bottom:0;left:0;right:0;height:{pct}%;'
+                    f'background:linear-gradient(to top,#06b6d4,#2563eb);"></div>'
                 )
         except Exception:
             pass
@@ -352,56 +390,51 @@ def _render_scan_drawer_tab() -> None:
             visibility: visible !important;
             min-width: 21rem !important;
         }
+        [data-testid="stSidebarCollapsedControl"] {
+            display: flex !important;
+        }
         """
 
     st.markdown(
         f"""
         <style>
         {force_sidebar_css}
-        .scan-drawer-rail {{
-            position: fixed;
-            left: 0;
-            top: 52px;
-            bottom: 32px;
-            width: 4px;
-            background: rgba(37, 99, 235, 0.22);
-            z-index: 999998;
-            pointer-events: none;
-            border-radius: 0 2px 2px 0;
-            overflow: hidden;
+        div.element-container:has(> div.scan-edge-btn-marker) {{
+            height: 0 !important;
+            min-height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            overflow: visible !important;
         }}
-        .scan-drawer-rail-fill {{
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            background: linear-gradient(to top, #06b6d4, #2563eb);
-        }}
-        .scan-drawer-tab-anchor + div[data-testid="stVerticalBlockBorderWrapper"] button,
-        .scan-drawer-tab-anchor + div button {{
+        div.element-container:has(> div.scan-edge-btn-marker) + div.element-container {{
             position: fixed !important;
             left: 0 !important;
-            top: 58px !important;
+            top: 72px !important;
             z-index: 999999 !important;
-            width: 28px !important;
-            height: 28px !important;
-            min-width: 28px !important;
-            min-height: 28px !important;
-            padding: 0 !important;
+            width: 38px !important;
             margin: 0 !important;
-            border-radius: 0 7px 7px 0 !important;
-            border: 2px solid rgba(147, 197, 253, 0.85) !important;
+            padding: 0 !important;
+        }}
+        div.element-container:has(> div.scan-edge-btn-marker) + div.element-container button {{
+            width: 34px !important;
+            height: 34px !important;
+            min-width: 34px !important;
+            min-height: 34px !important;
+            padding: 0 !important;
+            border-radius: 0 8px 8px 0 !important;
+            border: 2px solid rgba(147, 197, 253, 0.95) !important;
             border-left: none !important;
             background: linear-gradient(135deg, #2563eb, #06b6d4) !important;
             color: #ffffff !important;
-            font-size: 0.78rem !important;
+            font-size: 0.95rem !important;
             font-weight: 900 !important;
-            line-height: 1 !important;
-            box-shadow: 4px 4px 18px rgba(37, 99, 235, 0.55) !important;
+            box-shadow: 4px 4px 22px rgba(37, 99, 235, 0.65) !important;
         }}
         </style>
-        <div class="scan-drawer-rail">{rail_active}</div>
-        <div class="scan-drawer-tab-anchor"></div>
+        <div style="position:fixed;left:0;top:56px;bottom:24px;width:5px;
+            background:rgba(37,99,235,0.35);z-index:999998;pointer-events:none;
+            border-radius:0 3px 3px 0;overflow:hidden;">{rail_fill}</div>
+        <div class="scan-edge-btn-marker"></div>
         """,
         unsafe_allow_html=True,
     )
@@ -2076,10 +2109,9 @@ def _maybe_auto_scan_on_entry(profile_id: str) -> None:
         st.session_state["auto_scan_on_entry_done"] = True
         return
 
-    ok_pf, pf_msg = _preflight_polygon_key()
+    ok_pf, pf_msg = _preflight_polygon_key_cached()
     if not ok_pf:
-        if _is_cloud_space():
-            st.error(pf_msg)
+        st.session_state["polygon_scan_error"] = pf_msg
         return
 
     started, _msg = start_full_scan(profile_id)
@@ -2350,10 +2382,11 @@ def _render_scan_sidebar_panel(*, key_prefix: str = "sidebar_scan") -> None:
 def main() -> None:
     _init_scan_ui_state()
     _handle_cloud_scan_lifecycle()
+    _render_status_banner()
     _render_scan_drawer_tab()
     # --- Sidebar: report selection ---
     with st.sidebar:
-        if _scan_panel_enabled() and st.session_state.get("scan_panel_open", True):
+        if _scan_panel_enabled() and st.session_state.get("scan_panel_open", False):
             try:
                 _render_scan_sidebar_panel()
             except Exception as exc:

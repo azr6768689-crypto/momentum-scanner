@@ -11,6 +11,8 @@ services:
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     startCommand: python scripts/start_render.py
     envVars:
+      - key: RENDER
+        value: "true"
       - key: DATA_PROVIDER
         value: polygon
       - key: SCAN_PROFILE
