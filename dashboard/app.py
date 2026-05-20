@@ -2161,6 +2161,11 @@ def _render_scan_sidebar_panel() -> None:
         use_container_width=True,
         type="primary",
     )
+    if cloud and os.getenv("RENDER", "").lower() == "true":
+        st.caption(
+            "Render Free: סריקה **פשוטה** ~15–30 דק. השאר את הדף פתוח. "
+            f"Workers: {_cloud_scan_workers()} (מ-Environment)."
+        )
     if scan_clicked:
         if _is_cloud_space():
             ok_pf, pf_msg = _preflight_polygon_key()
