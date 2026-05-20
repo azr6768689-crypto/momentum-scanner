@@ -360,86 +360,14 @@ def _handle_cloud_scan_lifecycle() -> None:
         st.autorefresh(interval=10_000, key="cloud_scan_global_poll")
 
 
-def _render_scan_drawer_tab() -> None:
-    """Fixed edge rail + square tab (Streamlit :has selector) toggles sidebar scan panel."""
+def _render_scan_sidebar_tab() -> None:
+    """Scan toggle — always at the top of the sidebar (no CSS hacks)."""
     if not _scan_panel_enabled():
         return
-
+    build = _deploy_build_label()
     is_open = st.session_state.get("scan_panel_open", False)
-    rail_fill = ""
-    if _is_cloud_space():
-        try:
-            from src.cloud_scan_job import get_scan_progress, get_status
-
-            job = get_status()
-            if job.get("state") == "running":
-                prog = job.get("progress") or get_scan_progress()
-                pct = max(5, min(100, int(prog.get("percent", 0))))
-                rail_fill = (
-                    f'<div style="position:absolute;bottom:0;left:0;right:0;height:{pct}%;'
-                    f'background:linear-gradient(to top,#06b6d4,#2563eb);"></div>'
-                )
-        except Exception:
-            pass
-
-    force_sidebar_css = ""
-    if is_open:
-        force_sidebar_css = """
-        section[data-testid="stSidebar"] {
-            transform: translateX(0) !important;
-            visibility: visible !important;
-            min-width: 21rem !important;
-        }
-        [data-testid="stSidebarCollapsedControl"] {
-            display: flex !important;
-        }
-        """
-
-    st.markdown(
-        f"""
-        <style>
-        {force_sidebar_css}
-        div.element-container:has(> div.scan-edge-btn-marker) {{
-            height: 0 !important;
-            min-height: 0 !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            overflow: visible !important;
-        }}
-        div.element-container:has(> div.scan-edge-btn-marker) + div.element-container {{
-            position: fixed !important;
-            left: 0 !important;
-            top: 72px !important;
-            z-index: 999999 !important;
-            width: 38px !important;
-            margin: 0 !important;
-            padding: 0 !important;
-        }}
-        div.element-container:has(> div.scan-edge-btn-marker) + div.element-container button {{
-            width: 34px !important;
-            height: 34px !important;
-            min-width: 34px !important;
-            min-height: 34px !important;
-            padding: 0 !important;
-            border-radius: 0 8px 8px 0 !important;
-            border: 2px solid rgba(147, 197, 253, 0.95) !important;
-            border-left: none !important;
-            background: linear-gradient(135deg, #2563eb, #06b6d4) !important;
-            color: #ffffff !important;
-            font-size: 0.95rem !important;
-            font-weight: 900 !important;
-            box-shadow: 4px 4px 22px rgba(37, 99, 235, 0.65) !important;
-        }}
-        </style>
-        <div style="position:fixed;left:0;top:56px;bottom:24px;width:5px;
-            background:rgba(37,99,235,0.35);z-index:999998;pointer-events:none;
-            border-radius:0 3px 3px 0;overflow:hidden;">{rail_fill}</div>
-        <div class="scan-edge-btn-marker"></div>
-        """,
-        unsafe_allow_html=True,
-    )
-    label = "✕" if is_open else "🔎"
-    if st.button(label, key="scan_drawer_tab_btn", help="פתיחת / סגירת חלונית סריקה"):
+    label = f"✕ סגור · {build}" if is_open else f"🔎 סריקה · {build}"
+    if st.button(label, type="primary", use_container_width=True, key="scan_sidebar_tab_btn"):
         st.session_state["scan_panel_open"] = not is_open
         _rerun_app()
 
@@ -637,6 +565,25 @@ st.markdown(
         min-height: 0 !important;
     }
     footer, #MainMenu { visibility: hidden; }
+    section[data-testid="stSidebar"] {
+        transform: translateX(0) !important;
+        visibility: visible !important;
+        min-width: 19rem !important;
+    }
+    [data-testid="stSidebarCollapsedControl"] {
+        display: none !important;
+    }
+    .stApp::after {
+        content: "";
+        position: fixed;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 5px;
+        background: linear-gradient(180deg, rgba(37,99,235,0.2), rgba(6,182,212,0.55));
+        z-index: 999990;
+        pointer-events: none;
+    }
     .block-container { padding-top: 0.75rem !important; }
     .stApp {
         background:
@@ -2363,15 +2310,8 @@ def _render_scan_controls(*, key_prefix: str = "sidebar_scan") -> None:
 
 
 def _render_scan_sidebar_panel(*, key_prefix: str = "sidebar_scan") -> None:
-    """Scan panel at the top of the sidebar."""
-    st.markdown(
-        """
-        <div class="sidebar-scan-box">
-            <div class="sidebar-section-title" style="margin-top:0;">🔎 סריקה</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    """Scan controls inside the sidebar panel."""
+    _render_sidebar_section("חלונית סריקה")
     _render_scan_controls(key_prefix=key_prefix)
 
 
@@ -2383,9 +2323,9 @@ def main() -> None:
     _init_scan_ui_state()
     _handle_cloud_scan_lifecycle()
     _render_status_banner()
-    _render_scan_drawer_tab()
     # --- Sidebar: report selection ---
     with st.sidebar:
+        _render_scan_sidebar_tab()
         if _scan_panel_enabled() and st.session_state.get("scan_panel_open", False):
             try:
                 _render_scan_sidebar_panel()
