@@ -1,8 +1,10 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# After connect: set POLYGON_API_KEY and DASHBOARD_PASSWORD in the dashboard (sync: false).
 services:
   - type: web
     name: momentum-scanner
     env: python
-    plan: starter
+    plan: free
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     startCommand: python scripts/start_render.py
     envVars:
@@ -10,6 +12,8 @@ services:
         value: polygon
       - key: PYTHON_VERSION
         value: 3.11.9
+      - key: SCAN_PROFILE
+        value: simple
       - key: SCANNER_UNIVERSE_CSV
         value: data/universe/polygon_liquid_us.csv
       - key: SCANNER_SECTOR_MAP
@@ -18,12 +22,14 @@ services:
         value: "50"
       - key: SCANNER_NEWS_TOP
         value: "100"
-      - key: SCANNER_OUTPUT_SUFFIX
-        value: full_us_10
+      - key: SCAN_WORKERS
+        value: "6"
       - key: ENABLE_DASHBOARD_SCAN_BUTTON
         value: "true"
       - key: RUN_SCAN_ON_STARTUP
         value: "false"
+      - key: AUTO_SCAN_ON_ENTRY
+        value: "true"
       - key: POLYGON_API_KEY
         sync: false
       - key: DASHBOARD_PASSWORD

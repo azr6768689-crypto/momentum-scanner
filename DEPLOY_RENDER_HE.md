@@ -1,85 +1,84 @@
-# העלאת Momentum Scanner לענן עם Render
+# פריסה מלאה על Render (חלופה ל-Hugging Face / נטפרי)
 
-המטרה: לקבל קישור קבוע שאפשר לשלוח לעצמך במייל ולהיכנס מכל מחשב עם אינטרנט.
+המטרה: קישור ציבורי מסוג `https://momentum-scanner-xxxx.onrender.com` — **בלי חשבון Render אצל מי שנכנס**, רק סיסמת האפליקציה; לרוב עובר בסינון שחוסם את `huggingface.co`.
 
 ## מה כבר מוכן בפרויקט
 
-- `render.yaml` - הגדרות Render.
-- `runtime.txt` - Python 3.11.9.
-- `scripts/start_render.py` - מריץ סריקה ראשונה אם אין דוח, ואז מפעיל Streamlit.
-- הדשבורד תומך בסיסמה דרך `DASHBOARD_PASSWORD`.
-- הדשבורד כולל כפתור `הרץ סריקה חדשה`.
+- `render.yaml` — Blueprint (תוכנית **חינמית** `free`, סריקה מנותקת ברקע כמו ב-HF).
+- `runtime.txt` — Python 3.11.9.
+- `scripts/start_render.py` — מפעיל Streamlit; אופציונלית סריקה ראשונה אם אין דוח (`RUN_SCAN_ON_STARTUP`).
+- הדשבורד מזהה אוטומטית `RENDER=true` ומפעיל **workers מקבילים + סריקה ברקע** (לא נתקע את הדפדפן).
 
-## שלב 1: להעלות ל-GitHub פרטי
+**נטפרי:** אחרי שיש כתובת `onrender.com`, אפשר להדביק אותה ב-Hugging Face → Space Secrets → `ALTERNATE_APP_URL` כדי להציג קישור חלופי בממשק ה-HF.
 
-1. לפתוח חשבון ב-GitHub.
-2. ליצור Repository חדש כ-Private.
-3. להעלות אליו את תיקיית הפרויקט.
+---
 
-חשוב:
+## שלב 1: קוד ב-GitHub
 
-- לא להעלות `.env`.
-- כן להעלות את `data/universe/polygon_liquid_us.csv`.
-- כן להעלות את `data/universe/sector_map.csv`.
+הריפו אמור להיות על GitHub (למשל `azr6768689-crypto/momentum-scanner`), עם:
 
-## שלב 2: לפתוח Render
+- **לא** לדחוף `.env`.
+- **כן** `data/universe/polygon_liquid_us.csv` ו-`data/universe/sector_map.csv`.
 
-1. להיכנס ל-[Render](https://render.com).
-2. ללחוץ `New`.
-3. לבחור `Blueprint`.
-4. לבחור את ה-GitHub repository של הפרויקט.
-5. Render יקרא את `render.yaml` אוטומטית.
+עדכון מהמחשב:
 
-## שלב 3: להוסיף סודות ב-Render
-
-במסך השירות ב-Render, תחת `Environment`, להוסיף:
-
-```text
-POLYGON_API_KEY=המפתח_שלך_מPolygon
-DASHBOARD_PASSWORD=סיסמה_שרק_אתה_יודע
+```bash
+cd ~/Downloads/momentum_system
+git remote add github https://github.com/YOUR_USER/momentum-scanner.git   # אם עדיין אין
+git push github main
 ```
 
-אפשר להשאיר את שאר המשתנים כמו שהם:
+---
 
-```text
-DATA_PROVIDER=polygon
-SCANNER_INTRADAY_TOP=50
-SCANNER_NEWS_TOP=100
-ENABLE_DASHBOARD_SCAN_BUTTON=true
-```
+## שלב 2: Render — חיבור Blueprint
 
-## שלב 4: Deploy
+1. היכנס ל-[Render Dashboard](https://dashboard.render.com) (חשבון Render — רק אתה, לא המשתמשים בסורק).
+2. **New** → **Blueprint**.
+3. חבר את ה-repository מ-GitHub והסכם להתקנת `render.yaml`.
+4. Render יצור שירות **Web** בשם `momentum-scanner`.
 
-ללחוץ `Deploy`.
+---
 
-בפעם הראשונה Render יתקין חבילות ויעלה את הדשבורד.
+## שלב 3: סודות חובה
 
-אחרי שהדשבורד נפתח, לוחצים בסרגל הצד:
+בשירות שנוצר → **Environment** → הוסף לפחות:
 
-```text
-הרץ סריקה חדשה
-```
+| משתנה | ערך |
+|--------|-----|
+| `POLYGON_API_KEY` | מפתח מ-polygon.io |
+| `DASHBOARD_PASSWORD` | סיסמה שתציג למשתמשי הסורק |
 
-כך האתר עולה מהר ולא נתקע בזמן ההפעלה הראשונה.
+שאר המשתנים מוגדרים ב-`render.yaml` (כולל `SCAN_PROFILE=simple`, `AUTO_SCAN_ON_ENTRY=true`, `SCAN_WORKERS=6`).
 
-בסוף תקבל קישור כמו:
+אופציונלי אחרי שיש URL קבוע:
 
-```text
-https://momentum-scanner.onrender.com
-```
+| משתנה | ערך |
+|--------|-----|
+| `PUBLIC_APP_URL` | `https://your-service.onrender.com` — יוצג בפאנל «גישה מכל מחשב» אם תרצה כיתוב מדויק |
 
-את הקישור הזה אפשר לשלוח לעצמך במייל.
+שמור — Render יבנה מחדש.
+
+---
+
+## שלב 4: המתנה לבנייה וסריקה ראשונה
+
+1. פתח את כתובת השירות מ-Render.
+2. הזן `DASHBOARD_PASSWORD`.
+3. אם אין דוח: המתן ל-**סריקה אוטומטית בכניסה** או לחץ **סריקה ידנית** בסרגל.
+
+**Free:** השירות «נרדם» אחרי חוסר שימוש — הטעינה הראשונה אחרי שינה עלולה לקחת ~דקה.
+
+---
 
 ## שימוש יומי
 
-1. פותחים את הקישור מהמייל.
-2. מקלידים סיסמה.
-3. רואים את הדוח האחרון.
-4. אם רוצים לעדכן: לוחצים `הרץ סריקה חדשה` בסרגל הצד.
+1. פותחים את קישור `onrender.com` מהמייל / סימנייה.
+2. מזינים סיסמה.
+3. בוחרים דוח ורמת סריקה לפי הצורך.
 
-## הערות חשובות
+---
 
-- הנתונים מגיעים מ-Polygon, לכן חייבים `POLYGON_API_KEY`.
-- הסיסמה מגינה על הדשבורד, אבל לא מחליפה אבטחה ארגונית מלאה.
-- Render חינמי יכול להירדם. אם רוצים שהכל יעבוד מהר וקבוע, עדיף Render Starter/Paid.
-- דוחות וקאש בענן תלויים באחסון של השירות. אם עושים redeploy, ייתכן שיהיה צורך להריץ סריקה מחדש.
+## הערות
+
+- דוחות וקאש נשמרים על דיסק הקונטיינר — **redeploy** עלול למחוק; אם צריך שמירה קבועה, בשלב מאוחר יותר אפשר חיבור דיסק או אחסון חיצוני.
+- אם סריקה מלאה נכשלת—בדוק לוגים ב-Render וב־`POLYGON_API_KEY`.

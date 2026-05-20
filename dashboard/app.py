@@ -57,10 +57,16 @@ CLOUD_SPACE_PAGE_URL = "https://huggingface.co/spaces/azr6768689/momentum-scanne
 
 
 def _is_cloud_space() -> bool:
+    """True on Hugging Face Spaces or Render Web Services.
+
+    Both need parallel scan workers, detached background scans (so Streamlit stays
+    responsive), and the same timeout / Polygon messaging paths.
+    """
     return bool(
         os.getenv("SPACE_ID")
         or os.getenv("SPACE_REPO_NAME")
         or os.getenv("STREAMLIT_SHARING_MODE")
+        or (os.getenv("RENDER", "").strip().lower() == "true")
     )
 
 
@@ -262,6 +268,8 @@ def _render_cloud_access_panel() -> None:
     """Shareable link + short instructions for email / any device."""
     url = os.getenv("PUBLIC_APP_URL", CLOUD_APP_URL).strip() or CLOUD_APP_URL
     space_page = (os.getenv("PUBLIC_SPACE_PAGE_URL", "") or CLOUD_SPACE_PAGE_URL).strip()
+    # Optional: second deployment (e.g. Render) when HF/Caddy domains are blocked on filtered ISPs.
+    alt_url = os.getenv("ALTERNATE_APP_URL", "").strip()
     with st.expander("🔗 גישה מכל מחשב", expanded=True):
         st.markdown("**קישור ישיר לאפליקציה (מומלץ לשיתוף)**")
         st.markdown(
@@ -270,6 +278,21 @@ def _render_cloud_access_panel() -> None:
             unsafe_allow_html=True,
         )
         st.text_input("העתק קישור", value=url, label_visibility="collapsed", key="cloud_access_url_copy")
+        if alt_url:
+            st.markdown(
+                "**קישור חלופי (למשל Render — מתאים כש־Hugging Face או `*.hf.space` חסומים ברשת)**"
+            )
+            st.markdown(
+                f'<a class="cloud-access-url" href="{html.escape(alt_url)}" target="_blank" rel="noopener">'
+                f"{html.escape(alt_url)}</a>",
+                unsafe_allow_html=True,
+            )
+            st.text_input(
+                "העתק קישור חלופי",
+                value=alt_url,
+                label_visibility="collapsed",
+                key="cloud_alt_url_copy",
+            )
         if space_page:
             st.markdown("**קישור לדף ה-Space ב-Hugging Face** (אם הקישור הישיר לא נפתח)")
             st.markdown(
@@ -283,10 +306,19 @@ def _render_cloud_access_panel() -> None:
                 label_visibility="collapsed",
                 key="cloud_space_page_copy",
             )
+        st.info(
+            "**בלי חשבון Hugging Face:** בדף ה-Space בחר **Public** (Settings → Visibility). "
+            "אז הקישור הישיר נפתח לכולם; נדרשת רק **סיסמת האפליקציה** (`DASHBOARD_PASSWORD`)."
+        )
+        st.warning(
+            "**נטפרי / סינון:** לעיתים חוסמים את `huggingface.co` ו־`*.hf.space`. "
+            "אפשרויות: פניה לנטפרי להלבנת הכתובות, גלישה מ־**נייד** (לא דרך Wi‑Fi מסונן), "
+            "או אירוח נוסף — למשל **Render** (`DEPLOY_RENDER_HE.md`) והגדרה ב-Secrets של "
+            "`ALTERNATE_APP_URL` עם כתובת השירות מ־Render."
+        )
         st.caption(
-            "אם מופיע **404**, ריק, או \"Application error\": ב-Hugging Face פתח את דף ה-Space "
-            "והגדר **Public** (Settings → Visibility), או נסה אחרי **התחברות** לחשבון HF. "
-            "בכניסה לאפליקציה הזן את הסיסמה שהוגדרה ב-Secrets (`DASHBOARD_PASSWORD`)."
+            "אם מופיע **404**, ריק, או \"Application error\": ודא ש־**Public**, שהבנייה ב־HF הצליחה, "
+            "ושה-Secrets מלאים. בכניסה לאפליקציה הזן את `DASHBOARD_PASSWORD`."
         )
 
 
