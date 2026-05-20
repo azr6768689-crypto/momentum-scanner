@@ -30,6 +30,7 @@ python-dotenv>=1.0,<2.0    # Load API keys from .env (never hardcoded)
 
 # --- Dashboard ---------------------------------------------------------------
 streamlit>=1.30,<2.0       # Local dashboard
+streamlit-autorefresh>=1.0.1,<2.0  # Poll scan progress while job runs (st.autorefresh does not exist)
 altair>=5.0,<6.0           # Charts inside Streamlit
 
 # --- CLI & logging -----------------------------------------------------------

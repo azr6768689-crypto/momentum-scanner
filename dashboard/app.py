@@ -301,10 +301,13 @@ def _render_polygon_key_setup() -> None:
         st.caption(
             f"מקור: **{polygon_key_source()}** · …{polygon_key_tail(stored)} · {len(stored)} תווים"
         )
-    if _is_cloud_space():
+    if _is_cloud_space() and not stored:
         st.warning(
-            "אם עדכנת מפתח רק ב-Render Environment — הוא **עדיין דורס** את מה ששמרת כאן. "
-            "חובה ללחוץ **שמור מפתח** בשדה למטה (או למחוק את POLYGON_API_KEY ב-Render)."
+            "ב-Render: הגדר **POLYGON_API_KEY** ב-Environment, או הדבק מפתח למטה ולחץ **שמור מפתח**."
+        )
+    elif _is_cloud_space() and stored and polygon_key_source().startswith("קובץ"):
+        st.caption(
+            "מפתח שמור באפליקציה **דורס** מפתח ישן ב-Render Environment — עדכון ב-Render בלבד לא מספיק."
         )
     st.info(
         "1. [polygon.io/dashboard/api-keys](https://polygon.io/dashboard/api-keys) → **+ New Key** → Copy\n"
@@ -358,11 +361,21 @@ def _handle_cloud_scan_lifecycle() -> None:
         from src.cloud_scan_job import get_status
     except Exception:
         return
-    if get_status().get("state") == "running" and hasattr(st, "autorefresh"):
-        st.autorefresh(interval=10_000, key="cloud_scan_global_poll")
+    if get_status().get("state") == "running":
+        _poll_scan_progress_ui()
 
 
-def _scan_progress_details() -> tuple[int, str, str]:
+def _poll_scan_progress_ui() -> None:
+    """Rerun every 5s while a cloud scan runs (Streamlit has no built-in st.autorefresh)."""
+    try:
+        from streamlit_autorefresh import st_autorefresh
+
+        st_autorefresh(interval=5_000, limit=500, key="cloud_scan_global_poll")
+    except ImportError:
+        pass
+
+
+def _scan_progress_details() -> tuple[int, str, str, int, int]:
     """Return (percent 0–100, state, short message)."""
     try:
         from src.cloud_scan_job import get_scan_progress, get_status
@@ -370,30 +383,34 @@ def _scan_progress_details() -> tuple[int, str, str]:
         job = get_status()
         state = str(job.get("state", "idle"))
         if state == "idle":
-            return 0, state, ""
+            return 0, state, "", 0, 0
         if state == "ok":
-            return 100, state, str(job.get("message", "הושלם"))
+            return 100, state, str(job.get("message", "הושלם")), 0, 0
         prog = job.get("progress") or get_scan_progress()
         pct = max(0, min(100, int(prog.get("percent", 0))))
         msg = str(prog.get("message") or job.get("message") or "סריקה…")
-        return pct, state, msg
+        done = int(prog.get("done", 0) or 0)
+        total = int(prog.get("total", 0) or 0)
+        return pct, state, msg, done, total
     except Exception:
-        return 0, "idle", ""
+        return 0, "idle", "", 0, 0
 
 
 def _scan_rail_percent() -> int:
-    pct, _, _ = _scan_progress_details()
+    pct, _, _, _, _ = _scan_progress_details()
     return pct
 
 
 def _render_scan_progress_panel() -> None:
     """Vertical progress rail + st.progress — always at top of sidebar."""
     st.caption(f"גרסה: {_deploy_build_label()}")
-    pct, state, msg = _scan_progress_details()
-    fill_h = pct if pct > 0 else 0
+    pct, state, msg, done, total = _scan_progress_details()
+    fill_h = max(pct, 3) if state == "running" and pct < 3 else pct
     status_line = "ממתין לסריקה"
     if state == "running":
         status_line = f"סריקה {pct}%"
+        if done > 0 and total > 0:
+            status_line = f"סריקה {pct}% · {done:,}/{total:,}"
     elif state == "ok":
         status_line = "הסריקה הושלמה ✓"
     elif state == "error":
@@ -412,11 +429,29 @@ def _render_scan_progress_panel() -> None:
     with info_col:
         st.markdown(f"**{html.escape(status_line)}**")
         if msg and state == "running":
-            st.caption(html.escape(msg[:72]))
+            st.caption(html.escape(msg[:120]))
+        if state == "running":
+            st.caption("הדף מתעדכן אוטומטית כל 5 שניות")
 
     st.progress(min(1.0, max(0.0, pct / 100.0)))
+    if state == "running":
+        from src.cloud_scan_job import cancel_scan
+
+        if st.button("⏹ בטל סריקה תקועה", key="scan_cancel_stuck_btn"):
+            cancel_scan()
+            st.session_state.pop("auto_scan_on_entry_done", None)
+            _rerun_app()
     if state == "error" and msg:
-        st.error(msg[:200])
+        st.error(msg[:400])
+        try:
+            from src.cloud_scan_job import get_status
+
+            tail = (get_status().get("progress") or {}).get("log_tail") or get_status().get("log_tail", "")
+            if tail:
+                with st.expander("לוג אחרון"):
+                    st.code(tail[:3000])
+        except Exception:
+            pass
     st.divider()
 
 

@@ -265,7 +265,7 @@ def _load_universe_parallel(
             if df is not None and snap is not None:
                 universe[ticker] = df
                 snapshots[ticker] = snap
-            if done % 25 == 0 or done == total:
+            if done == 1 or done % 10 == 0 or done == total:
                 stocks_done = min(done, universe_size)
                 log.info(
                     "Loaded %d/%d universe stocks (%d usable)",
@@ -314,6 +314,7 @@ def main() -> int:
         help="Scan depth: simple (fast) | medium (balanced) | full (deepest)",
     )
     args = parser.parse_args()
+    write_progress(1, "מתחיל", message="טוען הגדרות סריקה…")
 
     profile = None
     if args.profile or os.getenv("SCAN_PROFILE"):
@@ -346,6 +347,7 @@ def main() -> int:
     _setup_logging(settings.log_level)
     log = logging.getLogger("run_pro_scanner")
 
+    write_progress(2, "מאמת מפתח", message="בודק מפתח Polygon…")
     provider = get_provider(settings)
     if settings.provider == "polygon":
         ok, msg = validate_polygon_api_key()

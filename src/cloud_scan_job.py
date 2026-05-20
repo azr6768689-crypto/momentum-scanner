@@ -4,8 +4,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -14,7 +16,19 @@ PID_PATH = ROOT / "data" / "reports" / ".scan_job.pid"
 LOG_PATH = ROOT / "data" / "reports" / ".scan_job.log"
 RUNNER = ROOT / "scripts" / "cloud_scan_runner.py"
 
-from src.scan_progress import clear_progress, read_progress
+from src.scan_progress import clear_progress, read_progress, write_progress
+
+_STALE_ZERO_PROGRESS_SEC = 300
+
+
+def _tail_log(max_chars: int = 1200) -> str:
+    if not LOG_PATH.exists():
+        return ""
+    try:
+        text = LOG_PATH.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return ""
+    return text[-max_chars:].strip()
 
 
 def _read_status() -> dict:
@@ -36,6 +50,27 @@ def _read_status() -> dict:
             }
             _write_status(data)
             PID_PATH.unlink(missing_ok=True)
+        else:
+            prog = read_progress()
+            pct = int(prog.get("percent", 0) or 0)
+            if pct <= 0 and STATUS_PATH.exists():
+                age = time.time() - STATUS_PATH.stat().st_mtime
+                if age > _STALE_ZERO_PROGRESS_SEC and not _parse_log_progress():
+                    data = {
+                        "state": "error",
+                        "message": (
+                            "הסריקה תקועה יותר מ-5 דקות ב-0%. "
+                            "לחץ «בטל סריקה» ואז «סריקה» שוב. "
+                            "ב-Render: SCAN_WORKERS=2."
+                        ),
+                        "log_tail": _tail_log(800),
+                    }
+                    _write_status(data)
+                    PID_PATH.unlink(missing_ok=True)
+                    try:
+                        os.kill(pid, signal.SIGTERM)
+                    except OSError:
+                        pass
     return data
 
 
@@ -101,19 +136,41 @@ def get_scan_progress() -> dict:
         except Exception:
             profile_label = ""
 
+    done = int(prog.get("done") or log_bits.get("done", 0) or 0)
+    total = int(prog.get("total") or log_bits.get("total", 0) or 2114)
+    message = prog.get("message") or job.get("message", "סריקה רצה…")
+    if done > 0 and total > 0 and "נטענו" not in str(message):
+        message = f"{message} · {done:,}/{total:,}"
+
     return {
         "percent": percent,
         "phase": prog.get("phase") or "סריקה",
-        "message": prog.get("message") or job.get("message", "סריקה רצה…"),
-        "done": prog.get("done") or log_bits.get("done", 0),
-        "total": prog.get("total") or log_bits.get("total", 2114),
+        "message": message,
+        "done": done,
+        "total": total,
         "profile_id": profile_id,
         "profile_label": profile_label,
+        "log_tail": _tail_log(400) if percent <= 5 else "",
     }
 
 
 def is_scan_running() -> bool:
     return _read_status().get("state") == "running"
+
+
+def cancel_scan() -> None:
+    """Stop a stuck cloud scan and reset status."""
+    if PID_PATH.exists():
+        try:
+            pid = int(PID_PATH.read_text().strip())
+            os.kill(pid, signal.SIGTERM)
+        except (OSError, ValueError):
+            pass
+        PID_PATH.unlink(missing_ok=True)
+    clear_progress()
+    _write_status({"state": "idle", "message": "הסריקה בוטלה"})
+    if LOG_PATH.exists():
+        LOG_PATH.unlink(missing_ok=True)
 
 
 def start_full_scan(profile_id: str = "simple") -> tuple[bool, str]:
@@ -153,6 +210,13 @@ def start_full_scan(profile_id: str = "simple") -> tuple[bool, str]:
 
     profile = get_profile(profile_id)
     PID_PATH.write_text(str(proc.pid), encoding="utf-8")
+    write_progress(
+        1,
+        "מתחיל",
+        message=f"{profile.label_he}: מפעיל תהליך סריקה…",
+        profile_id=profile_id,
+        profile_label=profile.label_he,
+    )
     _write_status(
         {
             "state": "running",
@@ -160,7 +224,8 @@ def start_full_scan(profile_id: str = "simple") -> tuple[bool, str]:
             "profile_label": profile.label_he,
             "pid": proc.pid,
             "message": f"{profile.label_he}: סריקה רצה…",
-            "percent": 0,
+            "percent": 1,
+            "started_at": time.time(),
         }
     )
     return True, "הסריקה התחילה."

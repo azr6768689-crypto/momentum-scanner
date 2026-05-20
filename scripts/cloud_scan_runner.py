@@ -10,10 +10,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 STATUS = ROOT / "data" / "reports" / ".scan_job.json"
+LOG_PATH = ROOT / "data" / "reports" / ".scan_job.log"
 sys.path.insert(0, str(ROOT))
 
 from src.polygon_key_store import resolve_polygon_api_key
+from src.polygon_preflight import validate_polygon_api_key
 from src.scan_profiles import apply_profile_to_env, get_profile
+from src.scan_progress import write_progress
 
 
 def _merge_status(patch: dict) -> None:
@@ -30,15 +33,23 @@ def _merge_status(patch: dict) -> None:
 def main() -> int:
     profile_id = sys.argv[1] if len(sys.argv) > 1 else "simple"
     STATUS.parent.mkdir(parents=True, exist_ok=True)
+    profile = get_profile(profile_id)
     _merge_status(
         {
             "state": "running",
             "profile": profile_id,
-            "message": "סריקה מלאה רצה…",
+            "profile_label": profile.label_he,
+            "message": f"{profile.label_he}: מאתחל…",
         }
     )
+    write_progress(
+        2,
+        "מתחיל",
+        message=f"{profile.label_he}: מאתחל סריקה…",
+        profile_id=profile_id,
+        profile_label=profile.label_he,
+    )
 
-    profile = get_profile(profile_id)
     apply_profile_to_env(profile)
     env = os.environ.copy()
     key = resolve_polygon_api_key()
@@ -55,9 +66,23 @@ def main() -> int:
         )
         return 1
     env["POLYGON_API_KEY"] = key
+    env["MASSIVE_API_KEY"] = key
     env["DATA_PROVIDER"] = "polygon"
-    env["SCAN_WORKERS"] = os.getenv("SCAN_WORKERS", "6")
+    env["SCAN_WORKERS"] = os.getenv("SCAN_WORKERS", "2")
     env["SCAN_PROGRESS_PATH"] = str(ROOT / "data" / "reports" / ".scan_progress.json")
+
+    ok, msg = validate_polygon_api_key(key)
+    if not ok:
+        _merge_status({"state": "error", "message": msg})
+        print(f"error_message={msg}", flush=True)
+        return 1
+    write_progress(
+        4,
+        "מאמת מפתח",
+        message=f"{profile.label_he}: מפתח תקין, טוען נתונים…",
+        profile_id=profile_id,
+        profile_label=profile.label_he,
+    )
 
     cmd = [
         sys.executable,
@@ -80,7 +105,8 @@ def main() -> int:
         proc = subprocess.run(
             cmd,
             cwd=str(ROOT),
-            capture_output=True,
+            stdout=sys.stdout,
+            stderr=subprocess.STDOUT,
             text=True,
             timeout=scan_timeout,
             env=env,
@@ -98,13 +124,22 @@ def main() -> int:
         )
         return 1
 
-    out = "\n".join(p for p in [proc.stdout, proc.stderr] if p and p.strip())
+    if LOG_PATH.exists():
+        try:
+            out = LOG_PATH.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            out = ""
     parsed: dict[str, str] = {}
     for line in out.splitlines():
         if "=" in line:
             key, _, val = line.partition("=")
             parsed[key.strip()] = val.strip()
 
+    err_msg = (
+        parsed.get("error_message")
+        or parsed.get("error")
+        or ""
+    ).strip()
     report = parsed.get("report_file", "")
     if proc.returncode == 0:
         requested = int(parsed.get("symbols_requested", "0") or 0)
@@ -131,7 +166,11 @@ def main() -> int:
 
     STATUS.write_text(
         json.dumps(
-            {"state": "error", "message": "scan failed", "log": out[-5000:]},
+            {
+                "state": "error",
+                "message": err_msg or "הסריקה נכשלה — בדוק מפתח Polygon או לוג בסרגל הצד.",
+                "log": out[-5000:],
+            },
             ensure_ascii=False,
         ),
         encoding="utf-8",
