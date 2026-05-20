@@ -288,30 +288,21 @@ def _render_scan_assistant_links() -> None:
 
 
 def _scan_panel_enabled() -> bool:
+    if _is_cloud_space():
+        return True
     return os.getenv("ENABLE_DASHBOARD_SCAN_BUTTON", "true").lower() not in {"0", "false", "no"}
 
 
 def _init_scan_ui_state() -> None:
-    """Reset legacy collapse flags; scan panel open by default."""
-    if not st.session_state.get("_scan_ui_reset_v3"):
-        st.session_state["_scan_ui_reset_v3"] = True
-        st.session_state["scan_ui_visible"] = True
-    for legacy in ("scan_sidebar_collapsed", "scan_panel_open", "scan_controls_visible"):
-        st.session_state.pop(legacy, None)
-    st.session_state.setdefault("scan_ui_visible", True)
-
-
-def _render_scan_open_button(*, key: str) -> None:
-    """Always-visible primary control to show the scan section."""
-    st.markdown('<div class="scan-open-btn-wrap"></div>', unsafe_allow_html=True)
-    if st.button(
-        "🔎 סריקה",
-        type="primary",
-        use_container_width=True,
-        key=key,
+    """Reset legacy collapse flags."""
+    for legacy in (
+        "scan_sidebar_collapsed",
+        "scan_panel_open",
+        "scan_controls_visible",
+        "scan_ui_visible",
+        "_scan_ui_reset_v3",
     ):
-        st.session_state["scan_ui_visible"] = True
-        _rerun_app()
+        st.session_state.pop(legacy, None)
 
 
 def _render_cloud_access_panel() -> None:
@@ -323,8 +314,6 @@ def _render_cloud_access_panel() -> None:
     hf_url = (os.getenv("ALTERNATE_APP_URL", "") or CLOUD_APP_URL).strip().rstrip("/")
     st.link_button("Render", render_url, use_container_width=True)
     st.link_button("Hugging Face", hf_url, use_container_width=True)
-    if _scan_panel_enabled() and not st.session_state.get("scan_ui_visible", True):
-        _render_scan_open_button(key="scan_open_from_links")
 
 
 def _rank_delta_badge_html(delta: str) -> str:
@@ -770,16 +759,27 @@ st.markdown(
     [data-testid="stSidebar"] [data-testid="stExpander"] summary:hover {
         background: linear-gradient(135deg, rgba(37, 99, 235, 0.62), rgba(6, 182, 212, 0.38)) !important;
     }
-    [data-testid="stSidebar"] .scan-open-btn-wrap + div[data-testid="stVerticalBlockBorderWrapper"] button,
-    [data-testid="stSidebar"] .scan-open-btn-wrap + div button,
-    [data-testid="stSidebar"] .scan-open-btn-wrap ~ div .stButton > button[kind="primary"],
-    div.scan-open-btn-wrap + div .stButton > button {
+    .main-scan-panel {
+        padding: 18px 20px 8px;
+        border-radius: 18px;
+        border: 2px solid rgba(37, 99, 235, 0.55);
+        background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 58, 138, 0.35));
+        margin-bottom: 8px;
+        direction: rtl;
+    }
+    .main-scan-title {
+        color: #fef3c7;
+        font-size: 1.35rem;
+        font-weight: 900;
+        margin-bottom: 4px;
+    }
+    .main-scan-wrap .stButton > button[kind="primary"] {
         background: linear-gradient(135deg, #2563eb, #06b6d4) !important;
         border: 2px solid rgba(147, 197, 253, 0.75) !important;
         color: #ffffff !important;
         font-weight: 900 !important;
-        font-size: 1rem !important;
-        min-height: 3rem !important;
+        font-size: 1.05rem !important;
+        min-height: 3.2rem !important;
         box-shadow: 0 10px 28px rgba(37, 99, 235, 0.45) !important;
     }
     [data-testid="stSidebar"] .stSlider [data-baseweb="slider"] > div > div {
@@ -2172,8 +2172,8 @@ def render_signal_card(row: pd.Series) -> None:
             st.write(f"**Target 2:** ${row['Target 2']:.2f}")
 
 
-def _render_scan_sidebar_panel() -> None:
-    """Scan controls in sidebar (section title rendered by caller)."""
+def _render_scan_controls(*, key_prefix: str = "main_scan") -> None:
+    """Scan profile picker + run button + progress."""
     from src.scan_profiles import list_profiles
 
     profiles = list_profiles()
@@ -2186,7 +2186,7 @@ def _render_scan_sidebar_panel() -> None:
         "רמת סריקה",
         profile_ids,
         index=profile_ids.index(default_profile),
-        key="scan_profile_select",
+        key=f"{key_prefix}_profile_select",
         format_func=lambda pid: profile_labels[pid],
     )
     selected = next(p for p in profiles if p.id == selected_profile)
@@ -2198,12 +2198,13 @@ def _render_scan_sidebar_panel() -> None:
     _render_cloud_scan_progress()
     job = get_status()
     if cloud and job.get("state") == "running" and hasattr(st, "autorefresh"):
-        st.autorefresh(interval=15_000, key="cloud_scan_progress_poll")
+        st.autorefresh(interval=15_000, key=f"{key_prefix}_cloud_scan_progress_poll")
 
     scan_clicked = st.button(
         f"▶ סריקה — {selected.label_he}",
         use_container_width=True,
         type="primary",
+        key=f"{key_prefix}_run_btn",
     )
     if scan_clicked:
         if _is_cloud_space():
@@ -2235,6 +2236,27 @@ def _render_scan_sidebar_panel() -> None:
         st.session_state["last_scan_profile"] = job.get("profile", selected_profile)
 
 
+def _render_main_scan_panel(*, key_prefix: str = "main_scan") -> None:
+    """Scan in the main page — visible even when the sidebar is collapsed."""
+    st.markdown(
+        """
+        <div class="main-scan-panel">
+            <div class="main-scan-title">🔎 סריקה</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    with st.container():
+        st.markdown('<div class="main-scan-wrap"></div>', unsafe_allow_html=True)
+        _render_scan_controls(key_prefix=key_prefix)
+
+
+def _render_scan_sidebar_panel(*, key_prefix: str = "sidebar_scan") -> None:
+    """Scan controls in sidebar."""
+    _render_sidebar_section("סריקה")
+    _render_scan_controls(key_prefix=key_prefix)
+
+
 # =============================================================================
 # Main app
 # =============================================================================
@@ -2245,14 +2267,11 @@ def main() -> None:
     with st.sidebar:
         _render_sidebar_brand()
         _render_cloud_access_panel()
-        if _scan_panel_enabled():
-            _render_sidebar_section("סריקה")
-            _render_scan_open_button(key="scan_open_sidebar_main")
-            if st.session_state.get("scan_ui_visible", True):
-                try:
-                    _render_scan_sidebar_panel()
-                except Exception as exc:
-                    st.error(f"שגיאה במקטע סריקה: {exc}")
+        if _scan_panel_enabled() and not _is_cloud_space():
+            try:
+                _render_scan_sidebar_panel()
+            except Exception as exc:
+                st.error(f"שגיאה במקטע סריקה: {exc}")
 
         _render_sidebar_section("דוח")
         reports = _discover_report_paths()
@@ -2299,9 +2318,11 @@ def main() -> None:
                 mtime.strftime("%d/%m/%Y %H:%M:%S"),
             )
 
+    show_main_scan = _scan_panel_enabled() and (_is_cloud_space() or csv_path is None)
+    if show_main_scan:
+        _render_main_scan_panel()
+
     if csv_path is None:
-        if _scan_panel_enabled() and not st.session_state.get("scan_ui_visible", True):
-            _render_scan_open_button(key="scan_open_main_no_report")
         st.markdown("### אין דוח להצגה עדיין")
         job_path = _report_path_from_job()
         if job_path:
