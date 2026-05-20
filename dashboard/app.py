@@ -383,6 +383,41 @@ def _handle_cloud_scan_lifecycle() -> None:
         st.autorefresh(interval=10_000, key="cloud_scan_global_poll")
 
 
+def _scan_rail_percent() -> int:
+    """Scan fill height 0–100 for the left edge progress rail."""
+    try:
+        from src.cloud_scan_job import get_scan_progress, get_status
+
+        job = get_status()
+        state = job.get("state", "idle")
+        if state == "idle":
+            return 0
+        if state == "ok":
+            return 100
+        prog = job.get("progress") or get_scan_progress()
+        return max(0, min(100, int(prog.get("percent", 0))))
+    except Exception:
+        return 0
+
+
+def _render_scan_progress_rail() -> None:
+    """Vertical edge rail — always visible; fill rises with scan %."""
+    pct = _scan_rail_percent()
+    fill_h = pct if pct > 0 else 0
+    pct_label = f"{pct}%" if pct > 0 else ""
+    st.markdown(
+        f"""
+        <div class="scan-edge-rail-wrap">
+            <div class="scan-edge-rail-track">
+                <div class="scan-edge-rail-fill" style="height:{fill_h}%;"></div>
+            </div>
+            {"<div class='scan-edge-rail-pct'>" + html.escape(pct_label) + "</div>" if pct_label else ""}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _render_scan_sidebar_tab() -> None:
     """Scan toggle — always at the top of the sidebar (no CSS hacks)."""
     if not _scan_panel_enabled():
@@ -602,16 +637,44 @@ st.markdown(
     [data-testid="stSidebarCollapsedControl"] {
         display: none !important;
     }
-    .stApp::after {
-        content: "";
+    .scan-edge-rail-wrap {
         position: fixed;
         left: 0;
         top: 0;
         bottom: 0;
-        width: 5px;
-        background: linear-gradient(180deg, rgba(37,99,235,0.2), rgba(6,182,212,0.55));
+        width: 20px;
         z-index: 999990;
         pointer-events: none;
+    }
+    .scan-edge-rail-track {
+        position: absolute;
+        left: 0;
+        top: 52px;
+        bottom: 16px;
+        width: 6px;
+        background: rgba(37, 99, 235, 0.2);
+        border-radius: 0 4px 4px 0;
+        overflow: hidden;
+        box-shadow: inset 0 0 8px rgba(15, 23, 42, 0.5);
+    }
+    .scan-edge-rail-fill {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: linear-gradient(to top, #06b6d4 0%, #2563eb 100%);
+        transition: height 0.35s ease;
+        box-shadow: 0 0 14px rgba(6, 182, 212, 0.55);
+    }
+    .scan-edge-rail-pct {
+        position: absolute;
+        left: 10px;
+        top: 58px;
+        font-size: 0.62rem;
+        font-weight: 900;
+        color: #bae6fd;
+        letter-spacing: 0.02em;
+        text-shadow: 0 0 8px rgba(37, 99, 235, 0.8);
     }
     .block-container { padding-top: 0.75rem !important; }
     .stApp {
@@ -2351,6 +2414,7 @@ def _render_scan_sidebar_panel(*, key_prefix: str = "sidebar_scan") -> None:
 def main() -> None:
     _init_scan_ui_state()
     _handle_cloud_scan_lifecycle()
+    _render_scan_progress_rail()
     _render_status_banner()
     # --- Sidebar: report selection ---
     with st.sidebar:
