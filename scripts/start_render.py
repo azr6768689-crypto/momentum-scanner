@@ -20,6 +20,9 @@ def _has_report() -> bool:
 def _run_initial_scan() -> None:
     if os.getenv("RUN_SCAN_ON_STARTUP", "true").lower() in {"0", "false", "no"}:
         return
+    if os.getenv("AUTO_SCAN_ON_ENTRY", "true").lower() not in {"0", "false", "no"}:
+        print("AUTO_SCAN_ON_ENTRY enabled; skipping blocking startup scan.", flush=True)
+        return
     if _has_report():
         print("Existing report found; skipping startup scan.", flush=True)
         return
@@ -49,7 +52,7 @@ def _run_initial_scan() -> None:
         print(f"Universe CSV not found at {universe_csv}; using configured starter universe.", flush=True)
 
     print("No report found; running initial scan before starting dashboard.", flush=True)
-    subprocess.run(cmd, cwd=ROOT, check=True)
+    subprocess.run(cmd, cwd=ROOT, check=False)
 
 
 def _start_streamlit() -> None:

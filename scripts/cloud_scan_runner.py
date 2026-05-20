@@ -12,27 +12,36 @@ ROOT = Path(__file__).resolve().parent.parent
 STATUS = ROOT / "data" / "reports" / ".scan_job.json"
 sys.path.insert(0, str(ROOT))
 
-from src.env_secrets import clean_env_secret
+from src.polygon_key_store import resolve_polygon_api_key
 from src.scan_profiles import apply_profile_to_env, get_profile
+
+
+def _merge_status(patch: dict) -> None:
+    existing: dict = {}
+    if STATUS.is_file():
+        try:
+            existing = json.loads(STATUS.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            existing = {}
+    existing.update(patch)
+    STATUS.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def main() -> int:
     profile_id = sys.argv[1] if len(sys.argv) > 1 else "simple"
     STATUS.parent.mkdir(parents=True, exist_ok=True)
-    STATUS.write_text(
-        json.dumps(
-            {"state": "running", "profile": profile_id, "message": "סריקה מלאה רצה…"},
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
+    _merge_status(
+        {
+            "state": "running",
+            "profile": profile_id,
+            "message": "סריקה מלאה רצה…",
+        }
     )
 
     profile = get_profile(profile_id)
     apply_profile_to_env(profile)
     env = os.environ.copy()
-    key = clean_env_secret(os.getenv("POLYGON_API_KEY", "")) or clean_env_secret(
-        os.getenv("MASSIVE_API_KEY", "")
-    )
+    key = resolve_polygon_api_key()
     if not key:
         STATUS.write_text(
             json.dumps(

@@ -309,6 +309,19 @@ def _build_rate_limits(raw: dict[str, Any]) -> dict[str, RateLimitConfig]:
 _VALID_DATA_PROVIDERS = frozenset({"demo", "tiingo", "polygon", "alpaca"})
 
 
+def _load_polygon_api_key_for_settings() -> str:
+    try:
+        from src.polygon_key_store import resolve_polygon_api_key
+
+        return resolve_polygon_api_key()
+    except Exception:
+        from src.env_secrets import clean_env_secret
+
+        return clean_env_secret(os.getenv("POLYGON_API_KEY", "")) or clean_env_secret(
+            os.getenv("MASSIVE_API_KEY", "")
+        )
+
+
 def _normalize_data_provider(raw: str | None) -> str:
     """Map DATA_PROVIDER to a known value; fix common HF Secrets mistakes."""
     provider = (raw or "demo").lower().strip()
@@ -500,10 +513,7 @@ def load_settings(config_dir: Path | None = None) -> Settings:
     return Settings(
         provider=provider,
         _tiingo_api_key=os.getenv("TIINGO_API_KEY", "").strip(),
-        _polygon_api_key=(
-            os.getenv("POLYGON_API_KEY", "").strip()
-            or os.getenv("MASSIVE_API_KEY", "").strip()
-        ),
+        _polygon_api_key=_load_polygon_api_key_for_settings(),
         _alpaca_api_key=os.getenv("ALPACA_API_KEY", "").strip(),
         _alpaca_secret_key=os.getenv("ALPACA_SECRET_KEY", "").strip(),
         _alpaca_base_url=os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets"),

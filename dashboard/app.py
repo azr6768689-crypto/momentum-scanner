@@ -40,6 +40,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from src.env_secrets import clean_env_secret
+from src.polygon_key_store import polygon_key_tail, resolve_polygon_api_key, save_polygon_api_key
+from src.polygon_preflight import validate_polygon_api_key
 from src.report_compare import attach_rank_delta
 from src.report_paths import is_official_report_csv
 
@@ -95,65 +97,11 @@ def _is_cloud_space() -> bool:
 
 
 def _resolve_polygon_api_key() -> str:
-    for name in ("POLYGON_API_KEY", "MASSIVE_API_KEY", "POLYGON_KEY"):
-        value = clean_env_secret(os.getenv(name, ""))
-        if not value:
-            continue
-        if value.lower() in {"polygon", "demo", "tiingo"}:
-            continue
-        if value.startswith("hf_"):
-            continue
-        return value
-    return ""
-
-
-def _secret_tail(value: str) -> str:
-    if len(value) < 4:
-        return "????"
-    return value[-4:]
+    return resolve_polygon_api_key()
 
 
 def _preflight_polygon_key() -> tuple[bool, str]:
-    key = _resolve_polygon_api_key()
-    if not key:
-        return (
-            False,
-            "חסר מפתח Polygon. Render → Environment → POLYGON_API_KEY "
-            "(מפתח מ-polygon.io/dashboard/api-keys).",
-        )
-    try:
-        import requests
-
-        for auth_mode in ("query", "bearer"):
-            if auth_mode == "query":
-                resp = requests.get(
-                    "https://api.polygon.io/v3/reference/tickers/AAPL",
-                    params={"apiKey": key},
-                    timeout=20,
-                )
-            else:
-                resp = requests.get(
-                    "https://api.polygon.io/v3/reference/tickers/AAPL",
-                    headers={"Authorization": f"Bearer {key}"},
-                    timeout=20,
-                )
-            if resp.status_code == 401:
-                continue
-            if resp.status_code == 403:
-                return (
-                    False,
-                    f"מפתח Polygon ללא הרשאה (403) · מסתיים ב-{_secret_tail(key)}",
-                )
-            if resp.status_code >= 400:
-                return False, f"Polygon שגיאה {resp.status_code}: {resp.text[:160]}"
-            return True, "ok"
-        return (
-            False,
-            f"מפתח Polygon נדחה (401) · מסתיים ב-{_secret_tail(key)}. "
-            "Render → Environment → POLYGON_API_KEY → הדבק מפתח חדש בלי מרכאות.",
-        )
-    except Exception as exc:
-        return False, f"לא הצלחתי לבדוק את Polygon: {exc}"
+    return validate_polygon_api_key()
 
 
 def _cloud_scan_limit(profile_id: str) -> int | None:
@@ -324,24 +272,39 @@ def _deploy_build_label() -> str:
 
 
 def _init_scan_ui_state() -> None:
-    """Scan drawer closed by default — edge tab opens it."""
-    st.session_state.setdefault("scan_panel_open", False)
+    """Open scan panel when there is no report yet (cloud)."""
+    if _is_cloud_space() and not _discover_report_paths():
+        st.session_state.setdefault("scan_panel_open", True)
+    else:
+        st.session_state.setdefault("scan_panel_open", False)
 
 
-def _render_status_banner() -> None:
-    """Build label + one clear Polygon / scan status message."""
-    st.caption(f"גרסה: {_deploy_build_label()}")
-    err = st.session_state.get("polygon_scan_error")
-    if err:
-        st.error(
-            f"{err} · Render → Environment → **POLYGON_API_KEY** → הדבק מפתח חדש מ-polygon.io"
-        )
+def _render_polygon_key_setup() -> None:
+    """Let user paste a working Polygon key without using Render dashboard."""
+    ok_pf, pf_msg = _preflight_polygon_key_cached()
+    if ok_pf:
+        st.session_state.pop("polygon_scan_error", None)
+        tail = polygon_key_tail()
+        st.success(f"מפתח Polygon תקין · …{tail}")
         return
-    pct, state, msg = _scan_progress_details()
-    if state == "running":
-        st.info(f"סריקה רצה… {pct}% · {msg[:80] if msg else ''}")
-    elif state == "error":
-        st.error(msg or "שגיאה בסריקה")
+
+    st.session_state["polygon_scan_error"] = pf_msg
+    st.error(pf_msg)
+    st.markdown(
+        "[צור מפתח חדש ב-Polygon](https://polygon.io/dashboard/api-keys) "
+        "(או massive.com) — העתק את **Default** API Key."
+    )
+    new_key = st.text_input("הדבק מפתח Polygon", type="password", key="polygon_key_paste")
+    if st.button("שמור מפתח והפעל סריקה", type="primary", key="polygon_key_save_btn"):
+        try:
+            save_polygon_api_key(new_key)
+        except ValueError as exc:
+            st.warning(str(exc))
+        else:
+            st.session_state.pop("_polygon_preflight_cache", None)
+            st.session_state.pop("polygon_scan_error", None)
+            st.session_state.pop("auto_scan_on_entry_done", None)
+            _rerun_app()
 
 
 def _default_scan_profile_id() -> str:
@@ -400,6 +363,7 @@ def _scan_rail_percent() -> int:
 
 def _render_scan_progress_panel() -> None:
     """Vertical progress rail + st.progress — always at top of sidebar."""
+    st.caption(f"גרסה: {_deploy_build_label()}")
     pct, state, msg = _scan_progress_details()
     fill_h = pct if pct > 0 else 0
     status_line = "ממתין לסריקה"
@@ -426,6 +390,8 @@ def _render_scan_progress_panel() -> None:
             st.caption(html.escape(msg[:72]))
 
     st.progress(min(1.0, max(0.0, pct / 100.0)))
+    if state == "error" and msg:
+        st.error(msg[:200])
     st.divider()
 
 
@@ -625,8 +591,6 @@ def _require_dashboard_password() -> None:
             )
     st.stop()
 
-
-_require_dashboard_password()
 
 st.markdown(
     """
@@ -2131,6 +2095,9 @@ def _maybe_auto_scan_on_entry(profile_id: str) -> None:
         return
     if st.session_state.get("auto_scan_on_entry_done"):
         return
+    if _discover_report_paths():
+        st.session_state["auto_scan_on_entry_done"] = True
+        return
 
     from src.cloud_scan_job import get_status, is_scan_running, start_full_scan
 
@@ -2141,6 +2108,7 @@ def _maybe_auto_scan_on_entry(profile_id: str) -> None:
     ok_pf, pf_msg = _preflight_polygon_key_cached()
     if not ok_pf:
         st.session_state["polygon_scan_error"] = pf_msg
+        st.session_state["auto_scan_on_entry_done"] = True
         return
 
     started, _msg = start_full_scan(profile_id)
@@ -2402,12 +2370,13 @@ def _render_scan_sidebar_panel(*, key_prefix: str = "sidebar_scan") -> None:
 # =============================================================================
 
 def main() -> None:
+    _require_dashboard_password()
     _init_scan_ui_state()
     _handle_cloud_scan_lifecycle()
-    _render_status_banner()
     # --- Sidebar: report selection ---
     with st.sidebar:
         _render_scan_progress_panel()
+        _render_polygon_key_setup()
         _render_scan_sidebar_tab()
         if _scan_panel_enabled() and st.session_state.get("scan_panel_open", False):
             try:

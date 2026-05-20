@@ -23,7 +23,9 @@ from src.config import load_settings, ensure_directories
 from src.data import get_provider
 from src.pro_long_scanner import write_professional_long_report
 from src.scan_profiles import ScanProfile, apply_profile_to_env, get_profile
-from src.scan_progress import write_progress
+from src.data.base import ProviderError
+from src.polygon_preflight import validate_polygon_api_key
+from src.scan_progress import clear_progress, write_progress
 
 
 def _validate_profile_thresholds(
@@ -216,6 +218,13 @@ def _fetch_symbol(
 ) -> tuple[str, pd.DataFrame | None, Any | None]:
     try:
         df = provider.get_daily_bars(ticker, start, end)
+    except ProviderError as exc:
+        msg = str(exc)
+        if "401" in msg or "Unknown API Key" in msg or "API Key" in msg:
+            raise RuntimeError(
+                "מפתח Polygon לא תקין (401). הדבק מפתח חדש בדשבורד → שמור מפתח."
+            ) from exc
+        return ticker, None, None
     except Exception:
         return ticker, None, None
     if df is None or df.empty:
@@ -338,6 +347,14 @@ def main() -> int:
     log = logging.getLogger("run_pro_scanner")
 
     provider = get_provider(settings)
+    if settings.provider == "polygon":
+        ok, msg = validate_polygon_api_key()
+        if not ok:
+            log.error("%s", msg)
+            clear_progress()
+            print("scanner_status=error")
+            print(f"error_message={msg}")
+            return 1
     tickers = _load_csv_universe(args.universe_csv) if args.universe_csv else _load_fixed_universe(settings)
     sector_map = _load_sector_map(args.sector_map)
     if args.limit:
