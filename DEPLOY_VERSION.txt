@@ -1,1 +1,1 @@
-2026-05-20-fix-dom-refresh-v17
+2026-05-20-scan-hub-fast-v18

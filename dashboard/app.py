@@ -261,14 +261,6 @@ def _deploy_build_label() -> str:
     return "local-dev"
 
 
-def _init_scan_ui_state() -> None:
-    """Open scan panel when there is no report yet (cloud)."""
-    if _is_cloud_space() and not _discover_report_paths():
-        st.session_state.setdefault("scan_panel_open", True)
-    else:
-        st.session_state.setdefault("scan_panel_open", False)
-
-
 def _default_scan_profile_id() -> str:
     from src.scan_profiles import list_profiles
 
@@ -323,85 +315,116 @@ def _scan_rail_percent() -> int:
     return pct
 
 
-def _render_scan_progress_body() -> None:
-    """Scan status widgets only (Streamlit native — safe for fragment reruns)."""
+def _render_scan_status_compact() -> None:
+    """Single progress line — safe inside st.fragment."""
     pct, state, msg, done, total = _scan_progress_details()
-    status_line = "ממתין לסריקה"
+    if state == "idle":
+        return
     if state == "running":
-        status_line = f"סריקה {pct}%"
-        if done > 0 and total > 0:
-            status_line = f"סריקה {pct}% · {done:,}/{total:,}"
+        detail = f" · {done:,}/{total:,}" if done > 0 and total > 0 else ""
+        st.markdown(f"**סריקה {pct}%**{detail}")
+        if msg:
+            st.caption(msg[:100])
+        st.progress(min(1.0, max(0.0, pct / 100.0)))
     elif state == "ok":
-        status_line = "הסריקה הושלמה ✓"
+        st.success("הסריקה הושלמה")
     elif state == "error":
-        status_line = "שגיאה בסריקה"
+        st.error((msg or "שגיאה")[:300])
 
-    st.markdown(f"**{status_line}**")
-    if msg and state == "running":
-        st.caption(msg[:120])
-    if state == "running":
-        st.caption("מתעדכן אוטומטית…")
-    st.progress(min(1.0, max(0.0, pct / 100.0)))
-    if state == "running":
-        from src.cloud_scan_job import cancel_scan
 
-        if st.button("⏹ בטל סריקה תקועה", key="scan_cancel_stuck_btn"):
+@st.fragment(run_every=timedelta(seconds=4))
+def _scan_status_fragment() -> None:
+    if _cloud_scan_state() == "running":
+        _render_scan_status_compact()
+
+
+def _render_sidebar_scan_hub() -> None:
+    """One scan block: status + profile + run (no duplicate progress / toggles)."""
+    if not _scan_panel_enabled():
+        return
+
+    from src.cloud_scan_job import cancel_scan, get_status, start_full_scan
+    from src.scan_profiles import list_profiles
+
+    provider = os.getenv("DATA_PROVIDER", "demo")
+    st.markdown("### סריקה")
+    st.caption(f"{_deploy_build_label()} · {provider}")
+
+    state = _cloud_scan_state()
+    if state == "running":
+        _scan_status_fragment()
+    elif state == "ok":
+        st.success("מוכן — בחר דוח למטה")
+    elif state == "error":
+        job = get_status()
+        st.error(str(job.get("message", "שגיאה"))[:300])
+
+    profiles = list_profiles()
+    profile_ids = [p.id for p in profiles]
+    labels = {p.id: p.label_he for p in profiles}
+    default_id = _default_scan_profile_id()
+    selected_id = _sidebar_selector(
+        "רמה",
+        profile_ids,
+        index=profile_ids.index(default_id),
+        key="scan_hub_profile",
+        format_func=lambda pid: labels[pid],
+    )
+
+    run_col, cancel_col = st.columns(2)
+    with run_col:
+        run_clicked = st.button(
+            "▶ הרץ",
+            type="primary",
+            use_container_width=True,
+            key="scan_hub_run",
+            disabled=state == "running",
+        )
+    with cancel_col:
+        if state == "running" and st.button("⏹ בטל", use_container_width=True, key="scan_hub_cancel"):
             cancel_scan()
             st.session_state.pop("auto_scan_on_entry_done", None)
             _rerun_app()
-    if state == "error" and msg:
-        st.error(msg[:400])
-        try:
-            from src.cloud_scan_job import get_status
 
-            tail = (get_status().get("progress") or {}).get("log_tail") or get_status().get("log_tail", "")
-            if tail:
-                with st.expander("לוג אחרון"):
-                    st.code(tail[:3000])
-        except Exception:
-            pass
+    if run_clicked and _is_cloud_space():
+        started, start_msg = start_full_scan(selected_id)
+        if started:
+            st.session_state["last_scan_profile"] = selected_id
+            st.session_state.pop("auto_scan_on_entry_done", None)
+            _rerun_app()
+        elif start_msg:
+            st.error(start_msg)
+    elif run_clicked:
+        with st.spinner("סורק…"):
+            ok, output = run_professional_scan_from_dashboard(selected_id)
+        st.cache_data.clear()
+        if ok:
+            for line in output.splitlines():
+                if line.startswith("report_file="):
+                    st.session_state["last_scan_report_file"] = line.split("=", 1)[-1].strip()
+            st.session_state["last_scan_profile"] = selected_id
+            _rerun_app()
+        else:
+            st.error("הסריקה נכשלה.")
 
+    job = get_status()
+    if job.get("state") == "ok" and job.get("report_file"):
+        st.session_state["last_scan_report_file"] = job["report_file"]
+        st.session_state["last_scan_profile"] = job.get("profile", selected_id)
 
-@st.fragment(run_every=timedelta(seconds=5))
-def _scan_progress_fragment() -> None:
-    """Poll scan job without full-page JS refresh (avoids removeChild crashes)."""
-    if _cloud_scan_state() != "running":
-        return
-    _render_scan_progress_body()
-
-
-def _render_scan_progress_panel() -> None:
-    """Progress at top of sidebar — fragment auto-polls while scan runs."""
-    provider = os.getenv("DATA_PROVIDER", "demo")
-    st.caption(f"גרסה: {_deploy_build_label()} · נתונים: {provider}")
-    if _cloud_scan_state() == "running":
-        _scan_progress_fragment()
-    else:
-        _render_scan_progress_body()
     st.divider()
 
 
-def _render_scan_sidebar_tab() -> None:
-    """Scan toggle — always at the top of the sidebar (no CSS hacks)."""
-    if not _scan_panel_enabled():
-        return
-    build = _deploy_build_label()
-    is_open = st.session_state.get("scan_panel_open", False)
-    label = f"✕ סגור · {build}" if is_open else f"🔎 סריקה · {build}"
-    if st.button(label, type="primary", use_container_width=True, key="scan_sidebar_tab_btn"):
-        st.session_state["scan_panel_open"] = not is_open
-        _rerun_app()
-
-
 def _render_cloud_access_panel() -> None:
-    """Two share links only — Render + Hugging Face."""
+    """Share links — tucked in expander."""
     render_url = (
         os.getenv("RENDER_EXTERNAL_URL", "").strip()
         or "https://momentum-scanner-bbhl.onrender.com"
     ).rstrip("/")
     hf_url = (os.getenv("ALTERNATE_APP_URL", "") or CLOUD_APP_URL).strip().rstrip("/")
-    st.link_button("Render", render_url, use_container_width=True)
-    st.link_button("Hugging Face", hf_url, use_container_width=True)
+    with st.expander("קישורים", expanded=False):
+        st.link_button("Render", render_url, use_container_width=True)
+        st.link_button("Hugging Face", hf_url, use_container_width=True)
 
 
 def _rank_delta_badge_html(delta: str) -> str:
@@ -2080,22 +2103,6 @@ def _maybe_auto_scan_on_entry(profile_id: str) -> None:
         st.session_state["last_scan_profile"] = profile_id
 
 
-def _render_cloud_scan_progress() -> None:
-    from src.cloud_scan_job import get_scan_progress, get_status
-
-    job = get_status()
-    state = job.get("state", "idle")
-    if state == "idle":
-        return
-    prog = job.get("progress") or get_scan_progress()
-    pct = min(1.0, max(0.0, int(prog.get("percent", 0)) / 100.0))
-    st.progress(pct)
-    if state == "ok":
-        _maybe_reload_after_scan_ok()
-    elif state == "error":
-        st.error(str(job.get("message", "שגיאה")))
-
-
 def _render_institutional_scanner_header(
     df: pd.DataFrame,
     report_label: str,
@@ -2264,85 +2271,16 @@ def render_signal_card(row: pd.Series) -> None:
             st.write(f"**Target 2:** ${row['Target 2']:.2f}")
 
 
-def _render_scan_controls(*, key_prefix: str = "sidebar_scan") -> None:
-    """Scan profile picker + run button + progress (UI only; lifecycle runs in main)."""
-    from src.scan_profiles import list_profiles
-
-    profiles = list_profiles()
-    profile_labels = {p.id: p.label_he for p in profiles}
-    default_profile = _default_scan_profile_id()
-    profile_ids = [p.id for p in profiles]
-    selected_profile = _sidebar_selector(
-        "רמת סריקה",
-        profile_ids,
-        index=profile_ids.index(default_profile),
-        key=f"{key_prefix}_profile_select",
-        format_func=lambda pid: profile_labels[pid],
-    )
-    selected = next(p for p in profiles if p.id == selected_profile)
-
-    from src.cloud_scan_job import get_status, start_full_scan
-
-    _render_cloud_scan_progress()
-
-    scan_clicked = st.button(
-        f"▶ סריקה — {selected.label_he}",
-        use_container_width=True,
-        type="primary",
-        key=f"{key_prefix}_run_btn",
-    )
-    if scan_clicked:
-        if _is_cloud_space():
-            started, start_msg = start_full_scan(selected_profile)
-            if started:
-                st.session_state["last_scan_profile"] = selected_profile
-                st.session_state.pop("auto_scan_on_entry_done", None)
-                _rerun_app()
-            elif start_msg:
-                st.error(start_msg)
-        else:
-            with st.spinner("סורק…"):
-                ok, output = run_professional_scan_from_dashboard(selected_profile)
-            st.cache_data.clear()
-            if ok:
-                for line in output.splitlines():
-                    if line.startswith("report_file="):
-                        st.session_state["last_scan_report_file"] = line.split("=", 1)[-1].strip()
-                st.session_state["last_scan_profile"] = selected_profile
-                _rerun_app()
-            else:
-                st.error("הסריקה נכשלה.")
-
-    job = get_status()
-    if job.get("state") == "ok" and job.get("report_file"):
-        st.session_state["last_scan_report_file"] = job["report_file"]
-        st.session_state["last_scan_profile"] = job.get("profile", selected_profile)
-
-
-def _render_scan_sidebar_panel(*, key_prefix: str = "sidebar_scan") -> None:
-    """Scan controls inside the sidebar panel."""
-    _render_sidebar_section("חלונית סריקה")
-    _render_scan_controls(key_prefix=key_prefix)
-
-
 # =============================================================================
 # Main app
 # =============================================================================
 
 def main() -> None:
     _require_dashboard_password()
-    _init_scan_ui_state()
     _handle_cloud_scan_lifecycle()
     # --- Sidebar: report selection ---
     with st.sidebar:
-        _render_scan_progress_panel()
-        _render_scan_sidebar_tab()
-        if _scan_panel_enabled() and st.session_state.get("scan_panel_open", False):
-            try:
-                _render_scan_sidebar_panel()
-            except Exception as exc:
-                st.error(f"שגיאה במקטע סריקה: {exc}")
-
+        _render_sidebar_scan_hub()
         _render_sidebar_brand()
         _render_cloud_access_panel()
 

@@ -89,9 +89,10 @@ def _default_workers() -> int:
     explicit = os.getenv("SCAN_WORKERS", "").strip()
     if explicit.isdigit() and int(explicit) > 0:
         return int(explicit)
-    if os.getenv("SPACE_ID") or os.getenv("SPACE_REPO_NAME"):
-        return 4
+    provider = os.getenv("DATA_PROVIDER", "demo").lower()
     cpu = os.cpu_count() or 4
+    if os.getenv("RENDER", "").lower() == "true" or os.getenv("SPACE_ID"):
+        return 8 if provider in {"demo", "tiingo"} else 4
     return min(32, max(8, cpu * 2))
 
 
@@ -264,7 +265,7 @@ def _load_universe_parallel(
             if df is not None and snap is not None:
                 universe[ticker] = df
                 snapshots[ticker] = snap
-            if done == 1 or done % 10 == 0 or done == total:
+            if done == 1 or done % 25 == 0 or done == total:
                 stocks_done = min(done, universe_size)
                 log.info(
                     "Loaded %d/%d universe stocks (%d usable)",

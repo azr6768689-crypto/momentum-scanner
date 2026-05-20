@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
@@ -166,19 +167,27 @@ def build_professional_long_rows(
     qqq_df = universe.get("QQQ")
     market = _market_regime(snapshots.get("SPY"), snapshots.get("QQQ"), snapshots.get("IWM"))
     sector_stats = _sector_strength(sector_map, universe, snapshots)
-    setups = [
-        _analyze_ticker(
-            t,
-            universe.get(t),
-            snapshots.get(t),
+
+    def _analyze_one(ticker: str):
+        sector = sector_map.get(ticker, "לא זמין")
+        return _analyze_ticker(
+            ticker,
+            universe.get(ticker),
+            snapshots.get(ticker),
             spy_df,
             qqq_df,
             market,
-            sector_map.get(t, "לא זמין"),
-            sector_stats.get(sector_map.get(t, "לא זמין"), _neutral_sector("לא זמין")),
+            sector,
+            sector_stats.get(sector, _neutral_sector("לא זמין")),
         )
-        for t in tickers
-    ]
+
+    workers_raw = os.getenv("SCAN_ANALYZE_WORKERS", "").strip()
+    workers = int(workers_raw) if workers_raw.isdigit() and int(workers_raw) > 0 else min(8, os.cpu_count() or 4)
+    if len(tickers) >= 80 and workers > 1:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            setups = list(pool.map(_analyze_one, tickers))
+    else:
+        setups = [_analyze_one(t) for t in tickers]
     setups.sort(key=lambda setup: (setup.probability, setup.institutional_score, setup.ticker), reverse=True)
 
     rows: list[dict[str, Any]] = []
