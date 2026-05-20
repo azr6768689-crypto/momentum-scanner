@@ -69,6 +69,40 @@ def resolve_polygon_api_key() -> str:
     return file_key
 
 
+def apply_polygon_key_to_env(key: str | None = None) -> str:
+    """Ensure POLYGON_API_KEY / DATA_PROVIDER are set in os.environ for this process."""
+    resolved = normalize_polygon_key(key or "") or resolve_polygon_api_key()
+    if not resolved:
+        return ""
+    os.environ["POLYGON_API_KEY"] = resolved
+    os.environ["MASSIVE_API_KEY"] = resolved
+    os.environ["DATA_PROVIDER"] = "polygon"
+    return resolved
+
+
+def ensure_polygon_key_file(key: str | None = None) -> str:
+    """Persist resolved key so detached scan subprocesses always find it on disk."""
+    resolved = apply_polygon_key_to_env(key)
+    if not resolved:
+        return ""
+    POLYGON_KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    POLYGON_KEY_FILE.write_text(resolved + "\n", encoding="utf-8")
+    return resolved
+
+
+def build_scan_process_env(base: dict | None = None) -> tuple[dict, str]:
+    """Build env dict for scan subprocesses with Polygon key guaranteed."""
+    env = dict(base if base is not None else os.environ)
+    key = resolve_polygon_api_key() or normalize_polygon_key(env.get("POLYGON_API_KEY", ""))
+    if not key:
+        return env, ""
+    env["POLYGON_API_KEY"] = key
+    env["MASSIVE_API_KEY"] = key
+    env["DATA_PROVIDER"] = "polygon"
+    env["RENDER"] = env.get("RENDER", "true" if _is_cloud_runtime() else "")
+    return env, key
+
+
 def save_polygon_api_key(raw_key: str) -> str:
     """Validate, persist to disk, and override process env."""
     from src.polygon_preflight import validate_polygon_api_key
@@ -81,8 +115,7 @@ def save_polygon_api_key(raw_key: str) -> str:
         raise ValueError(msg)
     POLYGON_KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
     POLYGON_KEY_FILE.write_text(key + "\n", encoding="utf-8")
-    os.environ["POLYGON_API_KEY"] = key
-    os.environ["MASSIVE_API_KEY"] = key
+    apply_polygon_key_to_env(key)
     return key
 
 

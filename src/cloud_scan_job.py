@@ -183,15 +183,19 @@ def start_full_scan(profile_id: str = "simple") -> tuple[bool, str]:
     if LOG_PATH.exists():
         LOG_PATH.unlink(missing_ok=True)
 
-    log_file = open(LOG_PATH, "w", encoding="utf-8")
-    env = os.environ.copy()
-    from src.polygon_key_store import resolve_polygon_api_key
+    from src.polygon_key_store import build_scan_process_env, ensure_polygon_key_file
+    from src.polygon_preflight import validate_polygon_api_key
 
-    polygon_key = resolve_polygon_api_key()
-    if polygon_key:
-        env["POLYGON_API_KEY"] = polygon_key
-        env["MASSIVE_API_KEY"] = polygon_key
-        env["DATA_PROVIDER"] = "polygon"
+    polygon_key = ensure_polygon_key_file()
+    if not polygon_key:
+        return False, "חסר מפתח Polygon. הדבק מפתח בסרגל → שמור מפתח (חייב ירוק)."
+    ok_pf, pf_msg = validate_polygon_api_key(polygon_key)
+    if not ok_pf:
+        _write_status({"state": "error", "message": pf_msg})
+        return False, pf_msg
+
+    log_file = open(LOG_PATH, "w", encoding="utf-8")
+    env, _ = build_scan_process_env(os.environ.copy())
     env["SCAN_PROGRESS_PATH"] = str(ROOT / "data" / "reports" / ".scan_progress.json")
     try:
         proc = subprocess.Popen(

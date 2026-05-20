@@ -352,7 +352,8 @@ def load_settings(config_dir: Path | None = None) -> Settings:
     #    override=True ensures a manual edit to the project .env is picked up
     #    even if the shell already has an older exported value.
     env_path = PROJECT_ROOT / ".env"
-    load_dotenv(env_path, override=True)
+    # Never wipe keys injected by Render / scan subprocess (override only unset vars).
+    load_dotenv(env_path, override=False)
 
     # 2. Read YAML files
     settings_yaml = _read_yaml(cdir / "settings.yaml")

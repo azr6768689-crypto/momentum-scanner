@@ -350,7 +350,8 @@ def main() -> int:
     write_progress(2, "מאמת מפתח", message="בודק מפתח Polygon…")
     provider = get_provider(settings)
     if settings.provider == "polygon":
-        ok, msg = validate_polygon_api_key()
+        scan_key = settings.get_polygon_key()
+        ok, msg = validate_polygon_api_key(scan_key)
         if not ok:
             log.error("%s", msg)
             clear_progress()

@@ -41,7 +41,11 @@ def validate_key_format(key: str) -> tuple[bool, str]:
 
 
 def validate_polygon_api_key(key: str | None = None) -> tuple[bool, str]:
+    from src.polygon_key_store import resolve_polygon_api_key
+
     key = normalize_polygon_key(key or "")
+    if not key:
+        key = resolve_polygon_api_key()
     if not key:
         return (
             False,

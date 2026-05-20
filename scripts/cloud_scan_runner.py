@@ -13,7 +13,7 @@ STATUS = ROOT / "data" / "reports" / ".scan_job.json"
 LOG_PATH = ROOT / "data" / "reports" / ".scan_job.log"
 sys.path.insert(0, str(ROOT))
 
-from src.polygon_key_store import resolve_polygon_api_key
+from src.polygon_key_store import build_scan_process_env, ensure_polygon_key_file
 from src.polygon_preflight import validate_polygon_api_key
 from src.scan_profiles import apply_profile_to_env, get_profile
 from src.scan_progress import write_progress
@@ -51,23 +51,20 @@ def main() -> int:
     )
 
     apply_profile_to_env(profile)
-    env = os.environ.copy()
-    key = resolve_polygon_api_key()
+    key = ensure_polygon_key_file()
     if not key:
         STATUS.write_text(
             json.dumps(
                 {
                     "state": "error",
-                    "message": "חסר POLYGON_API_KEY ב-Secrets",
+                    "message": "חסר מפתח Polygon. הדבק בסרגל → שמור מפתח.",
                 },
                 ensure_ascii=False,
             ),
             encoding="utf-8",
         )
         return 1
-    env["POLYGON_API_KEY"] = key
-    env["MASSIVE_API_KEY"] = key
-    env["DATA_PROVIDER"] = "polygon"
+    env, _ = build_scan_process_env(os.environ.copy())
     env["SCAN_WORKERS"] = os.getenv("SCAN_WORKERS", "2")
     env["SCAN_PROGRESS_PATH"] = str(ROOT / "data" / "reports" / ".scan_progress.json")
 

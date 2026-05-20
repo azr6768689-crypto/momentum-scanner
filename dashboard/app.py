@@ -42,6 +42,7 @@ sys.path.insert(0, str(ROOT))
 from src.env_secrets import clean_env_secret
 from src.polygon_key_store import (
     clear_polygon_api_key_file,
+    ensure_polygon_key_file,
     polygon_key_source,
     polygon_key_tail,
     resolve_polygon_api_key,
@@ -107,7 +108,7 @@ def _resolve_polygon_api_key() -> str:
 
 
 def _preflight_polygon_key() -> tuple[bool, str]:
-    return validate_polygon_api_key()
+    return validate_polygon_api_key(resolve_polygon_api_key())
 
 
 def _cloud_scan_limit(profile_id: str) -> int | None:
@@ -1922,7 +1923,9 @@ def run_professional_scan_from_dashboard(profile_id: str) -> tuple[bool, str]:
     if not ok_key:
         return False, key_msg
 
-    polygon_key = _resolve_polygon_api_key()
+    polygon_key = ensure_polygon_key_file(_resolve_polygon_api_key())
+    if not polygon_key:
+        return False, "חסר מפתח Polygon. שמור מפתח בסרגל (חייב ירוק)."
     profile = get_profile(profile_id)
     apply_profile_to_env(profile)
     universe_csv = Path(os.getenv("SCANNER_UNIVERSE_CSV", "data/universe/polygon_liquid_us.csv"))
@@ -2181,6 +2184,7 @@ def _maybe_auto_scan_on_entry(profile_id: str) -> None:
         st.session_state["auto_scan_on_entry_done"] = True
         return
 
+    ensure_polygon_key_file()
     started, _msg = start_full_scan(profile_id)
     st.session_state["auto_scan_on_entry_done"] = True
     if started:
@@ -2404,12 +2408,15 @@ def _render_scan_controls(*, key_prefix: str = "sidebar_scan") -> None:
             if not ok_pf:
                 st.error(pf_msg)
             else:
-                started, _msg = start_full_scan(selected_profile)
+                ensure_polygon_key_file()
+                started, start_msg = start_full_scan(selected_profile)
                 if started:
                     st.session_state["last_scan_profile"] = selected_profile
                     st.session_state.pop("_polygon_preflight_cache", None)
                     st.session_state.pop("auto_scan_on_entry_done", None)
                     _rerun_app()
+                elif start_msg:
+                    st.error(start_msg)
         else:
             with st.spinner("סורק…"):
                 ok, output = run_professional_scan_from_dashboard(selected_profile)
