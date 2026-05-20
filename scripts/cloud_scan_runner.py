@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent
 STATUS = ROOT / "data" / "reports" / ".scan_job.json"
 sys.path.insert(0, str(ROOT))
 
+from src.env_secrets import clean_env_secret
 from src.scan_profiles import apply_profile_to_env, get_profile
 
 
@@ -29,7 +30,9 @@ def main() -> int:
     profile = get_profile(profile_id)
     apply_profile_to_env(profile)
     env = os.environ.copy()
-    key = os.getenv("POLYGON_API_KEY", "").strip() or os.getenv("MASSIVE_API_KEY", "").strip()
+    key = clean_env_secret(os.getenv("POLYGON_API_KEY", "")) or clean_env_secret(
+        os.getenv("MASSIVE_API_KEY", "")
+    )
     if not key:
         STATUS.write_text(
             json.dumps(

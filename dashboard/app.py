@@ -39,6 +39,7 @@ import streamlit.components.v1 as components
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from src.env_secrets import clean_env_secret
 from src.report_compare import attach_rank_delta
 from src.report_paths import is_official_report_csv
 
@@ -95,7 +96,7 @@ def _is_cloud_space() -> bool:
 
 def _resolve_polygon_api_key() -> str:
     for name in ("POLYGON_API_KEY", "MASSIVE_API_KEY", "POLYGON_KEY"):
-        value = os.getenv(name, "").strip()
+        value = clean_env_secret(os.getenv(name, ""))
         if not value:
             continue
         if value.lower() in {"polygon", "demo", "tiingo"}:
@@ -106,31 +107,53 @@ def _resolve_polygon_api_key() -> str:
     return ""
 
 
+def _secret_tail(value: str) -> str:
+    if len(value) < 4:
+        return "????"
+    return value[-4:]
+
+
 def _preflight_polygon_key() -> tuple[bool, str]:
     key = _resolve_polygon_api_key()
     if not key:
         return (
             False,
-            "חסר מפתח Polygon ב-Secrets. הוסף secret בשם POLYGON_API_KEY "
-            "(רק המפתח מ-polygon.io, לא DATA_PROVIDER).",
+            "חסר מפתח Polygon. Render → Environment → POLYGON_API_KEY "
+            "(מפתח מ-polygon.io/dashboard/api-keys).",
         )
     try:
         import requests
 
-        resp = requests.get(
-            "https://api.polygon.io/v3/reference/tickers/AAPL",
-            params={"apiKey": key},
-            timeout=20,
+        for auth_mode in ("query", "bearer"):
+            if auth_mode == "query":
+                resp = requests.get(
+                    "https://api.polygon.io/v3/reference/tickers/AAPL",
+                    params={"apiKey": key},
+                    timeout=20,
+                )
+            else:
+                resp = requests.get(
+                    "https://api.polygon.io/v3/reference/tickers/AAPL",
+                    headers={"Authorization": f"Bearer {key}"},
+                    timeout=20,
+                )
+            if resp.status_code == 401:
+                continue
+            if resp.status_code == 403:
+                return (
+                    False,
+                    f"מפתח Polygon ללא הרשאה (403) · מסתיים ב-{_secret_tail(key)}",
+                )
+            if resp.status_code >= 400:
+                return False, f"Polygon שגיאה {resp.status_code}: {resp.text[:160]}"
+            return True, "ok"
+        return (
+            False,
+            f"מפתח Polygon נדחה (401) · מסתיים ב-{_secret_tail(key)}. "
+            "Render → Environment → POLYGON_API_KEY → הדבק מפתח חדש בלי מרכאות.",
         )
-        if resp.status_code == 401:
-            return False, "מפתח Polygon נדחה (401). בדוק שהעתקת את המפתח הנכון."
-        if resp.status_code == 403:
-            return False, "מפתח Polygon ללא הרשאה (403)."
-        if resp.status_code >= 400:
-            return False, f"Polygon החזיר שגיאה {resp.status_code}: {resp.text[:200]}"
     except Exception as exc:
         return False, f"לא הצלחתי לבדוק את Polygon: {exc}"
-    return True, "ok"
 
 
 def _cloud_scan_limit(profile_id: str) -> int | None:
@@ -519,7 +542,7 @@ def _render_sidebar_file_card(name: str, size_kb: float, generated: str) -> None
 
 
 def _require_dashboard_password() -> None:
-    password = os.getenv("DASHBOARD_PASSWORD", "").strip()
+    password = clean_env_secret(os.getenv("DASHBOARD_PASSWORD", ""))
     if not password or st.session_state.get("dashboard_authenticated"):
         return
 
@@ -533,6 +556,10 @@ def _require_dashboard_password() -> None:
         unsafe_allow_html=True,
     )
     st.caption("המערכת מוגנת בסיסמה כי היא מכילה כלי סריקה פרטי ונתוני API.")
+    st.info(
+        "הסיסמה היא **DASHBOARD_PASSWORD** ב-Render → Environment. "
+        "אחרי שינוי — Save → חכה ל-restart → נסה שוב **בלי רווחים**."
+    )
     entered = st.text_input("סיסמה", type="password")
     if st.button("כניסה", use_container_width=True, type="primary"):
         if not entered.strip():
@@ -543,10 +570,12 @@ def _require_dashboard_password() -> None:
         ):
             st.session_state["dashboard_authenticated"] = True
             st.session_state.pop("auto_scan_on_entry_done", None)
+            st.session_state.pop("_polygon_preflight_cache", None)
             _rerun_app()
         else:
             st.error(
-                "סיסמה לא נכונה. בדוק ב־Render (או HF) → Environment / Secrets את ערך DASHBOARD_PASSWORD."
+                "סיסמה לא נכונה. Render → Environment → **DASHBOARD_PASSWORD** — "
+                "הדבק סיסמה חדשה (בלי מרכאות), Save, חכה דקה, נסה שוב."
             )
     st.stop()
 
