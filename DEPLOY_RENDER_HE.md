@@ -4,10 +4,12 @@
 
 ## מה כבר מוכן בפרויקט
 
-- `render.yaml` — Blueprint (תוכנית **חינמית** `free`, סריקה מנותקת ברקע כמו ב-HF).
+- `render.yaml` — Blueprint (ראה הערה למטה על **free** מול **starter**).
 - `runtime.txt` — Python 3.11.9.
 - `scripts/start_render.py` — מפעיל Streamlit; אופציונלית סריקה ראשונה אם אין דוח (`RUN_SCAN_ON_STARTUP`).
 - הדשבורד מזהה אוטומטית `RENDER=true` ומפעיל **workers מקבילים + סריקה ברקע** (לא נתקע את הדפדפן).
+
+**חשוב — ריפו פרטי ב-GitHub:** ב-Render **אי אפשר** `plan: free` על שירות Web מריפו **Private**. אפשרויות: (א) להפוך את הריפו ל-**Public** ואז אפשר לשנות ב-`render.yaml` ל-`plan: free`, או (ב) להשאיר ריפו פרטי — צריך **Starter** (בתשלום). בקובץ `render.yaml` המוגדר כרגע: **`plan: starter`**.
 
 **נטפרי:** אחרי שיש כתובת `onrender.com`, אפשר להדביק אותה ב-Hugging Face → Space Secrets → `ALTERNATE_APP_URL` כדי להציג קישור חלופי בממשק ה-HF.
 

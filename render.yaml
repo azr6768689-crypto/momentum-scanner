@@ -1,17 +1,18 @@
 # Render Blueprint — https://render.com/docs/blueprint-spec
 # After connect: set POLYGON_API_KEY and DASHBOARD_PASSWORD in the dashboard (sync: false).
+#
+# plan: free works ONLY for public GitHub repos. Private repos require a paid instance
+# (starter or higher). To stay free: Settings → General → Change visibility → Public.
 services:
   - type: web
     name: momentum-scanner
     env: python
-    plan: free
+    plan: starter
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     startCommand: python scripts/start_render.py
     envVars:
       - key: DATA_PROVIDER
         value: polygon
-      - key: PYTHON_VERSION
-        value: 3.11.9
       - key: SCAN_PROFILE
         value: simple
       - key: SCANNER_UNIVERSE_CSV
