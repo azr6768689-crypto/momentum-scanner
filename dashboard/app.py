@@ -40,7 +40,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from src.env_secrets import clean_env_secret
-from src.polygon_key_store import polygon_key_tail, resolve_polygon_api_key, save_polygon_api_key
+from src.polygon_key_store import (
+    clear_polygon_api_key_file,
+    polygon_key_tail,
+    resolve_polygon_api_key,
+    save_polygon_api_key,
+)
 from src.polygon_preflight import validate_polygon_api_key
 from src.report_compare import attach_rank_delta
 from src.report_paths import is_official_report_csv
@@ -290,20 +295,33 @@ def _render_polygon_key_setup() -> None:
 
     st.session_state["polygon_scan_error"] = pf_msg
     st.error(pf_msg)
-    st.markdown(
-        "[צור מפתח חדש ב-Polygon](https://polygon.io/dashboard/api-keys) "
-        "(או massive.com) — העתק את **Default** API Key."
+    stored = resolve_polygon_api_key()
+    if stored:
+        st.caption(f"מפתח שמור כרגע: …{polygon_key_tail(stored)} ({len(stored)} תווים)")
+    st.info(
+        "1. היכנס ל-[polygon.io/dashboard/api-keys](https://polygon.io/dashboard/api-keys)\n"
+        "2. לחץ **+ New Key** → שם כלשהו → **Copy**\n"
+        "3. הדבק כאן **רק** את המפתח (30+ תווים, בלי מרכאות)\n"
+        "4. **לא** Publishable / לא GitHub / לא HF"
     )
     new_key = st.text_input("הדבק מפתח Polygon", type="password", key="polygon_key_paste")
-    if st.button("שמור מפתח והפעל סריקה", type="primary", key="polygon_key_save_btn"):
-        try:
-            save_polygon_api_key(new_key)
-        except ValueError as exc:
-            st.warning(str(exc))
-        else:
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("שמור מפתח והפעל סריקה", type="primary", key="polygon_key_save_btn"):
+            try:
+                save_polygon_api_key(new_key)
+            except ValueError as exc:
+                st.error(str(exc))
+            else:
+                st.session_state.pop("_polygon_preflight_cache", None)
+                st.session_state.pop("polygon_scan_error", None)
+                st.session_state.pop("auto_scan_on_entry_done", None)
+                _rerun_app()
+    with c2:
+        if st.button("מחק מפתח שמור", key="polygon_key_clear_btn"):
+            clear_polygon_api_key_file()
             st.session_state.pop("_polygon_preflight_cache", None)
             st.session_state.pop("polygon_scan_error", None)
-            st.session_state.pop("auto_scan_on_entry_done", None)
             _rerun_app()
 
 

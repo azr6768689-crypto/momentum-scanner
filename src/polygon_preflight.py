@@ -2,48 +2,86 @@
 
 from __future__ import annotations
 
+import re
+
 import requests
 
-from src.polygon_key_store import polygon_key_tail, resolve_polygon_api_key
+from src.polygon_key_store import normalize_polygon_key, polygon_key_tail
 
-_API_URLS = (
-    "https://api.polygon.io/v3/reference/tickers/AAPL",
-    "https://api.massive.com/v3/reference/tickers/AAPL",
+# Same endpoints the scanner uses (v2 aggregates), not only v3 reference.
+_CHECK_URLS = (
+    (
+        "https://api.polygon.io/v2/aggs/ticker/AAPL/prev",
+        "query",
+    ),
+    (
+        "https://api.polygon.io/v3/reference/tickers/AAPL",
+        "query",
+    ),
+    (
+        "https://api.massive.com/v2/aggs/ticker/AAPL/prev",
+        "query",
+    ),
 )
 
 
+def validate_key_format(key: str) -> tuple[bool, str]:
+    if len(key) < 20:
+        return (
+            False,
+            f"המפתח קצר מדי ({len(key)} תווים). העתק את **כל** המפתח מ-API Keys (בדרך כלל 30+ תווים).",
+        )
+    if key.startswith("ghp_") or key.startswith("github_"):
+        return False, "זה נראה כמו GitHub token — לא מפתח Polygon."
+    if key.startswith("hf_"):
+        return False, "זה נראה כמו Hugging Face token — לא מפתח Polygon."
+    if not re.fullmatch(r"[A-Za-z0-9_\-]+", key):
+        return False, "המפתח מכיל תווים לא חוקיים (רווח, גרשיים, עברית?). הדבק שוב בלי רווחים."
+    return True, "ok"
+
+
 def validate_polygon_api_key(key: str | None = None) -> tuple[bool, str]:
-    key = (key or resolve_polygon_api_key()).strip()
+    key = normalize_polygon_key(key or "")
     if not key:
         return (
             False,
-            "חסר מפתח Polygon. הדבק מפתח חדש למטה או ב-Render → POLYGON_API_KEY.",
+            "חסר מפתח Polygon. הדבק מפתח חדש למטה.",
         )
+    ok_fmt, fmt_msg = validate_key_format(key)
+    if not ok_fmt:
+        return False, fmt_msg
+
+    last_error = ""
     try:
-        for url in _API_URLS:
-            for auth_mode in ("query", "bearer"):
-                if auth_mode == "query":
-                    resp = requests.get(url, params={"apiKey": key}, timeout=20)
-                else:
-                    resp = requests.get(
-                        url,
-                        headers={"Authorization": f"Bearer {key}"},
-                        timeout=20,
-                    )
-                if resp.status_code == 401:
-                    continue
-                if resp.status_code == 403:
-                    return (
-                        False,
-                        f"מפתח ללא הרשאה (403) · מסתיים ב-{polygon_key_tail(key)}",
-                    )
-                if resp.status_code >= 400:
-                    return False, f"Polygon שגיאה {resp.status_code}: {resp.text[:160]}"
+        for url, auth_mode in _CHECK_URLS:
+            if auth_mode == "query":
+                resp = requests.get(url, params={"apiKey": key}, timeout=25)
+            else:
+                resp = requests.get(
+                    url,
+                    headers={"Authorization": f"Bearer {key}"},
+                    timeout=25,
+                )
+            if resp.status_code == 200:
                 return True, "ok"
+            if resp.status_code == 401:
+                try:
+                    last_error = resp.json().get("error", "Unauthorized")
+                except Exception:
+                    last_error = "Unauthorized"
+                continue
+            if resp.status_code == 403:
+                return (
+                    False,
+                    f"המפתח התקבל אבל אין מנוי לנתוני מניות (403). "
+                    f"נדרש מנוי Stocks ב-polygon.io · …{polygon_key_tail(key)}",
+                )
+            last_error = f"HTTP {resp.status_code}: {resp.text[:120]}"
         return (
             False,
-            f"מפתח נדחה (401) · מסתיים ב-{polygon_key_tail(key)}. "
-            "צור מפתח חדש ב-polygon.io/dashboard/api-keys והדבק למטה.",
+            f"Polygon דוחה את המפתח (401: {last_error}) · …{polygon_key_tail(key)}. "
+            "ודא: Dashboard → API Keys → **Default** key (לא Publishable). "
+            "אם אין מנוי פעיל — הפעל/חדש מנוי Stocks.",
         )
     except Exception as exc:
-        return False, f"לא הצלחתי לבדוק את Polygon: {exc}"
+        return False, f"לא הצלחתי לבדוק את Polygon (רשת): {exc}"
