@@ -477,14 +477,16 @@ def _require_dashboard_password() -> None:
         if not entered.strip():
             st.warning("הזן סיסמה.")
         elif hmac.compare_digest(
-            entered.encode("utf-8"),
+            entered.strip().encode("utf-8"),
             password.encode("utf-8"),
         ):
             st.session_state["dashboard_authenticated"] = True
             st.session_state.pop("auto_scan_on_entry_done", None)
             _rerun_app()
         else:
-            st.error("סיסמה לא נכונה. בדוק ב-Hugging Face → Settings → Secrets את DASHBOARD_PASSWORD.")
+            st.error(
+                "סיסמה לא נכונה. בדוק ב־Render (או HF) → Environment / Secrets את ערך DASHBOARD_PASSWORD."
+            )
     st.stop()
 
 
