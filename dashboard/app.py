@@ -25,7 +25,7 @@ import sys
 import re
 import json
 import html
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
 
@@ -286,22 +286,15 @@ def _handle_cloud_scan_lifecycle() -> None:
         return
     _maybe_auto_scan_on_entry(_default_scan_profile_id())
     _maybe_reload_after_scan_ok()
+
+
+def _cloud_scan_state() -> str:
     try:
         from src.cloud_scan_job import get_status
+
+        return str(get_status().get("state", "idle"))
     except Exception:
-        return
-    if get_status().get("state") == "running":
-        _poll_scan_progress_ui()
-
-
-def _poll_scan_progress_ui() -> None:
-    """Rerun every 5s while a cloud scan runs (Streamlit has no built-in st.autorefresh)."""
-    try:
-        from streamlit_autorefresh import st_autorefresh
-
-        st_autorefresh(interval=5_000, limit=500, key="cloud_scan_global_poll")
-    except ImportError:
-        pass
+        return "idle"
 
 
 def _scan_progress_details() -> tuple[int, str, str, int, int]:
@@ -330,12 +323,9 @@ def _scan_rail_percent() -> int:
     return pct
 
 
-def _render_scan_progress_panel() -> None:
-    """Vertical progress rail + st.progress — always at top of sidebar."""
-    provider = os.getenv("DATA_PROVIDER", "demo")
-    st.caption(f"גרסה: {_deploy_build_label()} · נתונים: {provider}")
+def _render_scan_progress_body() -> None:
+    """Scan status widgets only (Streamlit native — safe for fragment reruns)."""
     pct, state, msg, done, total = _scan_progress_details()
-    fill_h = max(pct, 3) if state == "running" and pct < 3 else pct
     status_line = "ממתין לסריקה"
     if state == "running":
         status_line = f"סריקה {pct}%"
@@ -346,23 +336,11 @@ def _render_scan_progress_panel() -> None:
     elif state == "error":
         status_line = "שגיאה בסריקה"
 
-    rail_col, info_col = st.columns([0.14, 0.86], gap="small")
-    with rail_col:
-        st.markdown(
-            f"""
-            <div class="sidebar-scan-rail">
-                <div class="sidebar-scan-rail-fill" style="height:{fill_h}%;"></div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with info_col:
-        st.markdown(f"**{html.escape(status_line)}**")
-        if msg and state == "running":
-            st.caption(html.escape(msg[:120]))
-        if state == "running":
-            st.caption("הדף מתעדכן אוטומטית כל 5 שניות")
-
+    st.markdown(f"**{status_line}**")
+    if msg and state == "running":
+        st.caption(msg[:120])
+    if state == "running":
+        st.caption("מתעדכן אוטומטית…")
     st.progress(min(1.0, max(0.0, pct / 100.0)))
     if state == "running":
         from src.cloud_scan_job import cancel_scan
@@ -382,6 +360,24 @@ def _render_scan_progress_panel() -> None:
                     st.code(tail[:3000])
         except Exception:
             pass
+
+
+@st.fragment(run_every=timedelta(seconds=5))
+def _scan_progress_fragment() -> None:
+    """Poll scan job without full-page JS refresh (avoids removeChild crashes)."""
+    if _cloud_scan_state() != "running":
+        return
+    _render_scan_progress_body()
+
+
+def _render_scan_progress_panel() -> None:
+    """Progress at top of sidebar — fragment auto-polls while scan runs."""
+    provider = os.getenv("DATA_PROVIDER", "demo")
+    st.caption(f"גרסה: {_deploy_build_label()} · נתונים: {provider}")
+    if _cloud_scan_state() == "running":
+        _scan_progress_fragment()
+    else:
+        _render_scan_progress_body()
     st.divider()
 
 
@@ -1826,7 +1822,8 @@ def _maybe_reload_after_scan_ok() -> None:
     st.session_state["scan_ok_reloaded_for"] = rid
     st.session_state["last_scan_report_file"] = job["report_file"]
     st.cache_data.clear()
-    _rerun_app()
+    if _cloud_scan_state() != "running":
+        _rerun_app()
 
 
 def _sidebar_selector(label: str, options: list, *, index: int, key: str, format_func=None):
