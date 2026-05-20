@@ -287,6 +287,33 @@ def _render_scan_assistant_links() -> None:
     st.caption("הקישורים נפתחים בטאב חדש · מומלץ לצמד לניתוח מהסורק")
 
 
+def _scan_panel_enabled() -> bool:
+    return os.getenv("ENABLE_DASHBOARD_SCAN_BUTTON", "true").lower() not in {"0", "false", "no"}
+
+
+def _init_scan_ui_state() -> None:
+    """Reset legacy collapse flags; scan panel open by default."""
+    if not st.session_state.get("_scan_ui_reset_v3"):
+        st.session_state["_scan_ui_reset_v3"] = True
+        st.session_state["scan_ui_visible"] = True
+    for legacy in ("scan_sidebar_collapsed", "scan_panel_open", "scan_controls_visible"):
+        st.session_state.pop(legacy, None)
+    st.session_state.setdefault("scan_ui_visible", True)
+
+
+def _render_scan_open_button(*, key: str) -> None:
+    """Always-visible primary control to show the scan section."""
+    st.markdown('<div class="scan-open-btn-wrap"></div>', unsafe_allow_html=True)
+    if st.button(
+        "🔎 סריקה",
+        type="primary",
+        use_container_width=True,
+        key=key,
+    ):
+        st.session_state["scan_ui_visible"] = True
+        _rerun_app()
+
+
 def _render_cloud_access_panel() -> None:
     """Two share links only — Render + Hugging Face."""
     render_url = (
@@ -296,6 +323,8 @@ def _render_cloud_access_panel() -> None:
     hf_url = (os.getenv("ALTERNATE_APP_URL", "") or CLOUD_APP_URL).strip().rstrip("/")
     st.link_button("Render", render_url, use_container_width=True)
     st.link_button("Hugging Face", hf_url, use_container_width=True)
+    if _scan_panel_enabled() and not st.session_state.get("scan_ui_visible", True):
+        _render_scan_open_button(key="scan_open_from_links")
 
 
 def _rank_delta_badge_html(delta: str) -> str:
@@ -741,8 +770,17 @@ st.markdown(
     [data-testid="stSidebar"] [data-testid="stExpander"] summary:hover {
         background: linear-gradient(135deg, rgba(37, 99, 235, 0.62), rgba(6, 182, 212, 0.38)) !important;
     }
-    [data-testid="stSidebar"] [data-testid="stExpander"].scan-panel-expander summary {
-        list-style: none;
+    [data-testid="stSidebar"] .scan-open-btn-wrap + div[data-testid="stVerticalBlockBorderWrapper"] button,
+    [data-testid="stSidebar"] .scan-open-btn-wrap + div button,
+    [data-testid="stSidebar"] .scan-open-btn-wrap ~ div .stButton > button[kind="primary"],
+    div.scan-open-btn-wrap + div .stButton > button {
+        background: linear-gradient(135deg, #2563eb, #06b6d4) !important;
+        border: 2px solid rgba(147, 197, 253, 0.75) !important;
+        color: #ffffff !important;
+        font-weight: 900 !important;
+        font-size: 1rem !important;
+        min-height: 3rem !important;
+        box-shadow: 0 10px 28px rgba(37, 99, 235, 0.45) !important;
     }
     [data-testid="stSidebar"] .stSlider [data-baseweb="slider"] > div > div {
         background: linear-gradient(90deg, #2563eb, #06b6d4) !important;
@@ -2135,11 +2173,7 @@ def render_signal_card(row: pd.Series) -> None:
 
 
 def _render_scan_sidebar_panel() -> None:
-    """Scan controls — always visible in sidebar (open by default)."""
-    st.session_state.pop("scan_sidebar_collapsed", None)
-    st.session_state.pop("scan_panel_open", None)
-
-    _render_sidebar_section("סריקה")
+    """Scan controls in sidebar (section title rendered by caller)."""
     from src.scan_profiles import list_profiles
 
     profiles = list_profiles()
@@ -2206,12 +2240,19 @@ def _render_scan_sidebar_panel() -> None:
 # =============================================================================
 
 def main() -> None:
+    _init_scan_ui_state()
     # --- Sidebar: report selection ---
     with st.sidebar:
         _render_sidebar_brand()
         _render_cloud_access_panel()
-        if os.getenv("ENABLE_DASHBOARD_SCAN_BUTTON", "true").lower() not in {"0", "false", "no"}:
-            _render_scan_sidebar_panel()
+        if _scan_panel_enabled():
+            _render_sidebar_section("סריקה")
+            _render_scan_open_button(key="scan_open_sidebar_main")
+            if st.session_state.get("scan_ui_visible", True):
+                try:
+                    _render_scan_sidebar_panel()
+                except Exception as exc:
+                    st.error(f"שגיאה במקטע סריקה: {exc}")
 
         _render_sidebar_section("דוח")
         reports = _discover_report_paths()
@@ -2259,6 +2300,8 @@ def main() -> None:
             )
 
     if csv_path is None:
+        if _scan_panel_enabled() and not st.session_state.get("scan_ui_visible", True):
+            _render_scan_open_button(key="scan_open_main_no_report")
         st.markdown("### אין דוח להצגה עדיין")
         job_path = _report_path_from_job()
         if job_path:
