@@ -24,7 +24,7 @@ services:
       - key: SCANNER_NEWS_TOP
         value: "100"
       - key: SCAN_WORKERS
-        value: "4"
+        value: "6"
       - key: SCAN_TIMEOUT_SECONDS
         value: "7200"
       - key: ENABLE_DASHBOARD_SCAN_BUTTON
@@ -32,7 +32,7 @@ services:
       - key: RUN_SCAN_ON_STARTUP
         value: "false"
       - key: AUTO_SCAN_ON_ENTRY
-        value: "false"
+        value: "true"
       - key: POLYGON_API_KEY
         sync: false
       - key: DASHBOARD_PASSWORD

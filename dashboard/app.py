@@ -2135,70 +2135,70 @@ def render_signal_card(row: pd.Series) -> None:
 
 
 def _render_scan_sidebar_panel() -> None:
-    """Scan controls — Streamlit expander (header always visible to reopen)."""
+    """Scan controls — always visible in sidebar (open by default)."""
     st.session_state.pop("scan_sidebar_collapsed", None)
     st.session_state.pop("scan_panel_open", None)
 
-    with st.expander("🔎 סריקה — לחץ לפתיחה / סגירה", expanded=True):
-        from src.scan_profiles import list_profiles
+    _render_sidebar_section("סריקה")
+    from src.scan_profiles import list_profiles
 
-        profiles = list_profiles()
-        profile_labels = {p.id: p.label_he for p in profiles}
-        default_profile = os.getenv("SCAN_PROFILE", "simple")
-        if default_profile not in profile_labels:
-            default_profile = "simple"
-        profile_ids = [p.id for p in profiles]
-        selected_profile = _sidebar_selector(
-            "רמת סריקה",
-            profile_ids,
-            index=profile_ids.index(default_profile),
-            key="scan_profile_select",
-            format_func=lambda pid: profile_labels[pid],
-        )
-        selected = next(p for p in profiles if p.id == selected_profile)
+    profiles = list_profiles()
+    profile_labels = {p.id: p.label_he for p in profiles}
+    default_profile = os.getenv("SCAN_PROFILE", "simple")
+    if default_profile not in profile_labels:
+        default_profile = "simple"
+    profile_ids = [p.id for p in profiles]
+    selected_profile = _sidebar_selector(
+        "רמת סריקה",
+        profile_ids,
+        index=profile_ids.index(default_profile),
+        key="scan_profile_select",
+        format_func=lambda pid: profile_labels[pid],
+    )
+    selected = next(p for p in profiles if p.id == selected_profile)
 
-        cloud = _is_cloud_space()
-        from src.cloud_scan_job import get_status, start_full_scan
+    cloud = _is_cloud_space()
+    from src.cloud_scan_job import get_status, start_full_scan
 
-        _maybe_auto_scan_on_entry(selected_profile)
-        _render_cloud_scan_progress()
-        job = get_status()
-        if cloud and job.get("state") == "running" and hasattr(st, "autorefresh"):
-            st.autorefresh(interval=20_000, key="cloud_scan_progress_poll")
+    _maybe_auto_scan_on_entry(selected_profile)
+    _render_cloud_scan_progress()
+    job = get_status()
+    if cloud and job.get("state") == "running" and hasattr(st, "autorefresh"):
+        st.autorefresh(interval=15_000, key="cloud_scan_progress_poll")
 
-        scan_clicked = st.button(
-            f"▶ סריקה — {selected.label_he}",
-            use_container_width=True,
-            type="primary",
-        )
-        if scan_clicked:
-            if _is_cloud_space():
-                ok_pf, pf_msg = _preflight_polygon_key_cached()
-                if not ok_pf:
-                    st.error(pf_msg)
-                else:
-                    started, _msg = start_full_scan(selected_profile)
-                    if started:
-                        st.session_state["last_scan_profile"] = selected_profile
-                        st.session_state.pop("_polygon_preflight_cache", None)
-                        _rerun_app()
+    scan_clicked = st.button(
+        f"▶ סריקה — {selected.label_he}",
+        use_container_width=True,
+        type="primary",
+    )
+    if scan_clicked:
+        if _is_cloud_space():
+            ok_pf, pf_msg = _preflight_polygon_key_cached()
+            if not ok_pf:
+                st.error(pf_msg)
             else:
-                with st.spinner("סורק…"):
-                    ok, output = run_professional_scan_from_dashboard(selected_profile)
-                st.cache_data.clear()
-                if ok:
-                    for line in output.splitlines():
-                        if line.startswith("report_file="):
-                            st.session_state["last_scan_report_file"] = line.split("=", 1)[-1].strip()
+                started, _msg = start_full_scan(selected_profile)
+                if started:
                     st.session_state["last_scan_profile"] = selected_profile
+                    st.session_state.pop("_polygon_preflight_cache", None)
                     _rerun_app()
-                else:
-                    st.error("הסריקה נכשלה.")
+        else:
+            with st.spinner("סורק…"):
+                ok, output = run_professional_scan_from_dashboard(selected_profile)
+            st.cache_data.clear()
+            if ok:
+                for line in output.splitlines():
+                    if line.startswith("report_file="):
+                        st.session_state["last_scan_report_file"] = line.split("=", 1)[-1].strip()
+                st.session_state["last_scan_profile"] = selected_profile
+                _rerun_app()
+            else:
+                st.error("הסריקה נכשלה.")
 
-        job = get_status()
-        if job.get("state") == "ok" and job.get("report_file"):
-            st.session_state["last_scan_report_file"] = job["report_file"]
-            st.session_state["last_scan_profile"] = job.get("profile", selected_profile)
+    job = get_status()
+    if job.get("state") == "ok" and job.get("report_file"):
+        st.session_state["last_scan_report_file"] = job["report_file"]
+        st.session_state["last_scan_profile"] = job.get("profile", selected_profile)
 
 
 # =============================================================================
