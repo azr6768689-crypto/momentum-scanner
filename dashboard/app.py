@@ -337,20 +337,11 @@ def _render_status_banner() -> None:
             f"{err} · Render → Environment → **POLYGON_API_KEY** → הדבק מפתח חדש מ-polygon.io"
         )
         return
-    if _is_cloud_space():
-        try:
-            from src.cloud_scan_job import get_scan_progress, get_status
-
-            job = get_status()
-            state = job.get("state", "idle")
-            if state == "running":
-                prog = job.get("progress") or get_scan_progress()
-                pct = int(prog.get("percent", 0))
-                st.info(f"סריקה אוטומטית רצה… {pct}%")
-            elif state == "error":
-                st.error(str(job.get("message", "שגיאה בסריקה")))
-        except Exception:
-            pass
+    pct, state, msg = _scan_progress_details()
+    if state == "running":
+        st.info(f"סריקה רצה… {pct}% · {msg[:80] if msg else ''}")
+    elif state == "error":
+        st.error(msg or "שגיאה בסריקה")
 
 
 def _default_scan_profile_id() -> str:
@@ -383,39 +374,59 @@ def _handle_cloud_scan_lifecycle() -> None:
         st.autorefresh(interval=10_000, key="cloud_scan_global_poll")
 
 
-def _scan_rail_percent() -> int:
-    """Scan fill height 0–100 for the left edge progress rail."""
+def _scan_progress_details() -> tuple[int, str, str]:
+    """Return (percent 0–100, state, short message)."""
     try:
         from src.cloud_scan_job import get_scan_progress, get_status
 
         job = get_status()
-        state = job.get("state", "idle")
+        state = str(job.get("state", "idle"))
         if state == "idle":
-            return 0
+            return 0, state, ""
         if state == "ok":
-            return 100
+            return 100, state, str(job.get("message", "הושלם"))
         prog = job.get("progress") or get_scan_progress()
-        return max(0, min(100, int(prog.get("percent", 0))))
+        pct = max(0, min(100, int(prog.get("percent", 0))))
+        msg = str(prog.get("message") or job.get("message") or "סריקה…")
+        return pct, state, msg
     except Exception:
-        return 0
+        return 0, "idle", ""
 
 
-def _render_scan_progress_rail() -> None:
-    """Vertical edge rail — always visible; fill rises with scan %."""
-    pct = _scan_rail_percent()
+def _scan_rail_percent() -> int:
+    pct, _, _ = _scan_progress_details()
+    return pct
+
+
+def _render_scan_progress_panel() -> None:
+    """Vertical progress rail + st.progress — always at top of sidebar."""
+    pct, state, msg = _scan_progress_details()
     fill_h = pct if pct > 0 else 0
-    pct_label = f"{pct}%" if pct > 0 else ""
-    st.markdown(
-        f"""
-        <div class="scan-edge-rail-wrap">
-            <div class="scan-edge-rail-track">
-                <div class="scan-edge-rail-fill" style="height:{fill_h}%;"></div>
+    status_line = "ממתין לסריקה"
+    if state == "running":
+        status_line = f"סריקה {pct}%"
+    elif state == "ok":
+        status_line = "הסריקה הושלמה ✓"
+    elif state == "error":
+        status_line = "שגיאה בסריקה"
+
+    rail_col, info_col = st.columns([0.14, 0.86], gap="small")
+    with rail_col:
+        st.markdown(
+            f"""
+            <div class="sidebar-scan-rail">
+                <div class="sidebar-scan-rail-fill" style="height:{fill_h}%;"></div>
             </div>
-            {"<div class='scan-edge-rail-pct'>" + html.escape(pct_label) + "</div>" if pct_label else ""}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+            """,
+            unsafe_allow_html=True,
+        )
+    with info_col:
+        st.markdown(f"**{html.escape(status_line)}**")
+        if msg and state == "running":
+            st.caption(html.escape(msg[:72]))
+
+    st.progress(min(1.0, max(0.0, pct / 100.0)))
+    st.divider()
 
 
 def _render_scan_sidebar_tab() -> None:
@@ -637,44 +648,23 @@ st.markdown(
     [data-testid="stSidebarCollapsedControl"] {
         display: none !important;
     }
-    .scan-edge-rail-wrap {
-        position: fixed;
-        left: 0;
-        top: 0;
-        bottom: 0;
-        width: 20px;
-        z-index: 999990;
-        pointer-events: none;
-    }
-    .scan-edge-rail-track {
-        position: absolute;
-        left: 0;
-        top: 52px;
-        bottom: 16px;
-        width: 6px;
-        background: rgba(37, 99, 235, 0.2);
-        border-radius: 0 4px 4px 0;
+    .sidebar-scan-rail {
+        width: 100%;
+        min-height: 130px;
+        background: rgba(37, 99, 235, 0.16);
+        border-radius: 8px;
+        position: relative;
         overflow: hidden;
-        box-shadow: inset 0 0 8px rgba(15, 23, 42, 0.5);
+        border: 1px solid rgba(96, 165, 250, 0.45);
     }
-    .scan-edge-rail-fill {
+    .sidebar-scan-rail-fill {
         position: absolute;
         bottom: 0;
         left: 0;
         right: 0;
         background: linear-gradient(to top, #06b6d4 0%, #2563eb 100%);
         transition: height 0.35s ease;
-        box-shadow: 0 0 14px rgba(6, 182, 212, 0.55);
-    }
-    .scan-edge-rail-pct {
-        position: absolute;
-        left: 10px;
-        top: 58px;
-        font-size: 0.62rem;
-        font-weight: 900;
-        color: #bae6fd;
-        letter-spacing: 0.02em;
-        text-shadow: 0 0 8px rgba(37, 99, 235, 0.8);
+        box-shadow: 0 0 12px rgba(6, 182, 212, 0.45);
     }
     .block-container { padding-top: 0.75rem !important; }
     .stApp {
@@ -2414,10 +2404,10 @@ def _render_scan_sidebar_panel(*, key_prefix: str = "sidebar_scan") -> None:
 def main() -> None:
     _init_scan_ui_state()
     _handle_cloud_scan_lifecycle()
-    _render_scan_progress_rail()
     _render_status_banner()
     # --- Sidebar: report selection ---
     with st.sidebar:
+        _render_scan_progress_panel()
         _render_scan_sidebar_tab()
         if _scan_panel_enabled() and st.session_state.get("scan_panel_open", False):
             try:
