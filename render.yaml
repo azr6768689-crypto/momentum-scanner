@@ -1,5 +1,6 @@
 # Render Blueprint — https://render.com/docs/blueprint-spec
-# After connect: set POLYGON_API_KEY and DASHBOARD_PASSWORD in the dashboard (sync: false).
+# After connect: set DASHBOARD_PASSWORD in the dashboard (sync: false).
+# Optional live data: DATA_PROVIDER=polygon|tiingo + matching API key in Environment.
 #
 # plan: free works ONLY for public GitHub repos. Private repos require a paid instance
 # (starter or higher). To stay free: Settings → General → Change visibility → Public.
@@ -14,7 +15,7 @@ services:
       - key: RENDER
         value: "true"
       - key: DATA_PROVIDER
-        value: polygon
+        value: demo
       - key: SCAN_PROFILE
         value: simple
       - key: SCANNER_UNIVERSE_CSV
@@ -35,7 +36,5 @@ services:
         value: "false"
       - key: AUTO_SCAN_ON_ENTRY
         value: "true"
-      - key: POLYGON_API_KEY
-        sync: false
       - key: DASHBOARD_PASSWORD
         sync: false

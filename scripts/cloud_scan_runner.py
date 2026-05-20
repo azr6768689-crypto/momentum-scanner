@@ -13,10 +13,9 @@ STATUS = ROOT / "data" / "reports" / ".scan_job.json"
 LOG_PATH = ROOT / "data" / "reports" / ".scan_job.log"
 sys.path.insert(0, str(ROOT))
 
-from src.polygon_key_store import build_scan_process_env, ensure_polygon_key_file
-from src.polygon_preflight import validate_polygon_api_key
 from src.scan_profiles import apply_profile_to_env, get_profile
 from src.scan_progress import write_progress
+from src.scan_runtime import build_scan_subprocess_env
 
 
 def _merge_status(patch: dict) -> None:
@@ -51,32 +50,12 @@ def main() -> int:
     )
 
     apply_profile_to_env(profile)
-    key = ensure_polygon_key_file()
-    if not key:
-        STATUS.write_text(
-            json.dumps(
-                {
-                    "state": "error",
-                    "message": "חסר מפתח Polygon. הדבק בסרגל → שמור מפתח.",
-                },
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-        return 1
-    env, _ = build_scan_process_env(os.environ.copy())
+    env = build_scan_subprocess_env(os.environ.copy())
     env["SCAN_WORKERS"] = os.getenv("SCAN_WORKERS", "2")
-    env["SCAN_PROGRESS_PATH"] = str(ROOT / "data" / "reports" / ".scan_progress.json")
-
-    ok, msg = validate_polygon_api_key(key)
-    if not ok:
-        _merge_status({"state": "error", "message": msg})
-        print(f"error_message={msg}", flush=True)
-        return 1
     write_progress(
         4,
-        "מאמת מפתח",
-        message=f"{profile.label_he}: מפתח תקין, טוען נתונים…",
+        "מתחיל",
+        message=f"{profile.label_he}: טוען נתונים ({env.get('DATA_PROVIDER', 'demo')})…",
         profile_id=profile_id,
         profile_label=profile.label_he,
     )

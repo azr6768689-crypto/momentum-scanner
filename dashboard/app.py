@@ -40,15 +40,6 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from src.env_secrets import clean_env_secret
-from src.polygon_key_store import (
-    clear_polygon_api_key_file,
-    ensure_polygon_key_file,
-    polygon_key_source,
-    polygon_key_tail,
-    resolve_polygon_api_key,
-    save_polygon_api_key,
-)
-from src.polygon_preflight import validate_polygon_api_key
 from src.report_compare import attach_rank_delta
 from src.report_paths import is_official_report_csv
 
@@ -101,14 +92,6 @@ def _is_cloud_space() -> bool:
         or os.getenv("STREAMLIT_SHARING_MODE")
         or (os.getenv("RENDER", "").strip().lower() == "true")
     )
-
-
-def _resolve_polygon_api_key() -> str:
-    return resolve_polygon_api_key()
-
-
-def _preflight_polygon_key() -> tuple[bool, str]:
-    return validate_polygon_api_key(resolve_polygon_api_key())
 
 
 def _cloud_scan_limit(profile_id: str) -> int | None:
@@ -286,56 +269,6 @@ def _init_scan_ui_state() -> None:
         st.session_state.setdefault("scan_panel_open", False)
 
 
-def _render_polygon_key_setup() -> None:
-    """Let user paste a working Polygon key without using Render dashboard."""
-    ok_pf, pf_msg = _preflight_polygon_key_cached()
-    if ok_pf:
-        st.session_state.pop("polygon_scan_error", None)
-        tail = polygon_key_tail()
-        st.success(f"מפתח Polygon תקין · …{tail}")
-        return
-
-    st.session_state["polygon_scan_error"] = pf_msg
-    st.error(pf_msg)
-    stored = resolve_polygon_api_key()
-    if stored:
-        st.caption(
-            f"מקור: **{polygon_key_source()}** · …{polygon_key_tail(stored)} · {len(stored)} תווים"
-        )
-    if _is_cloud_space() and not stored:
-        st.warning(
-            "ב-Render: הגדר **POLYGON_API_KEY** ב-Environment, או הדבק מפתח למטה ולחץ **שמור מפתח**."
-        )
-    elif _is_cloud_space() and stored and polygon_key_source().startswith("קובץ"):
-        st.caption(
-            "מפתח שמור באפליקציה **דורס** מפתח ישן ב-Render Environment — עדכון ב-Render בלבד לא מספיק."
-        )
-    st.info(
-        "1. [polygon.io/dashboard/api-keys](https://polygon.io/dashboard/api-keys) → **+ New Key** → Copy\n"
-        "2. הדבק למטה → **שמור מפתח** (חייב להופיע ירוק)\n"
-        "3. מפתח ארוך (30+ תווים), בלי מרכאות"
-    )
-    new_key = st.text_input("הדבק מפתח Polygon", type="password", key="polygon_key_paste")
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("שמור מפתח והפעל סריקה", type="primary", key="polygon_key_save_btn"):
-            try:
-                save_polygon_api_key(new_key)
-            except ValueError as exc:
-                st.error(str(exc))
-            else:
-                st.session_state.pop("_polygon_preflight_cache", None)
-                st.session_state.pop("polygon_scan_error", None)
-                st.session_state.pop("auto_scan_on_entry_done", None)
-                _rerun_app()
-    with c2:
-        if st.button("מחק מפתח שמור", key="polygon_key_clear_btn"):
-            clear_polygon_api_key_file()
-            st.session_state.pop("_polygon_preflight_cache", None)
-            st.session_state.pop("polygon_scan_error", None)
-            _rerun_app()
-
-
 def _default_scan_profile_id() -> str:
     from src.scan_profiles import list_profiles
 
@@ -351,12 +284,7 @@ def _handle_cloud_scan_lifecycle() -> None:
     """Auto-scan, polling, and report reload — always active (not tied to panel visibility)."""
     if not _is_cloud_space():
         return
-    ok_pf, pf_msg = _preflight_polygon_key_cached()
-    if not ok_pf:
-        st.session_state["polygon_scan_error"] = pf_msg
-    else:
-        st.session_state.pop("polygon_scan_error", None)
-        _maybe_auto_scan_on_entry(_default_scan_profile_id())
+    _maybe_auto_scan_on_entry(_default_scan_profile_id())
     _maybe_reload_after_scan_ok()
     try:
         from src.cloud_scan_job import get_status
@@ -404,7 +332,8 @@ def _scan_rail_percent() -> int:
 
 def _render_scan_progress_panel() -> None:
     """Vertical progress rail + st.progress — always at top of sidebar."""
-    st.caption(f"גרסה: {_deploy_build_label()}")
+    provider = os.getenv("DATA_PROVIDER", "demo")
+    st.caption(f"גרסה: {_deploy_build_label()} · נתונים: {provider}")
     pct, state, msg, done, total = _scan_progress_details()
     fill_h = max(pct, 3) if state == "running" and pct < 3 else pct
     status_line = "ממתין לסריקה"
@@ -643,7 +572,6 @@ def _require_dashboard_password() -> None:
         ):
             st.session_state["dashboard_authenticated"] = True
             st.session_state.pop("auto_scan_on_entry_done", None)
-            st.session_state.pop("_polygon_preflight_cache", None)
             _rerun_app()
         else:
             st.error(
@@ -1919,13 +1847,6 @@ def _sidebar_selector(label: str, options: list, *, index: int, key: str, format
 def run_professional_scan_from_dashboard(profile_id: str) -> tuple[bool, str]:
     from src.scan_profiles import apply_profile_to_env, get_profile
 
-    ok_key, key_msg = _preflight_polygon_key()
-    if not ok_key:
-        return False, key_msg
-
-    polygon_key = ensure_polygon_key_file(_resolve_polygon_api_key())
-    if not polygon_key:
-        return False, "חסר מפתח Polygon. שמור מפתח בסרגל (חייב ירוק)."
     profile = get_profile(profile_id)
     apply_profile_to_env(profile)
     universe_csv = Path(os.getenv("SCANNER_UNIVERSE_CSV", "data/universe/polygon_liquid_us.csv"))
@@ -1952,8 +1873,6 @@ def run_professional_scan_from_dashboard(profile_id: str) -> tuple[bool, str]:
         cmd.extend(["--workers", str(CLOUD_SCAN_WORKERS)])
 
     scan_env = os.environ.copy()
-    scan_env["POLYGON_API_KEY"] = polygon_key
-    scan_env["DATA_PROVIDER"] = "polygon"
     if _is_cloud_space():
         scan_env["SCAN_WORKERS"] = str(CLOUD_SCAN_WORKERS)
 
@@ -1975,7 +1894,7 @@ def run_professional_scan_from_dashboard(profile_id: str) -> tuple[bool, str]:
 
     output = "\n".join(part for part in [completed.stdout, completed.stderr] if part.strip())
     if completed.returncode != 0 and _is_cloud_space() and "401" in output:
-        output += "\n\nבדוק ש-POLYGON_API_KEY תקין ב-Secrets."
+        output += "\n\nבדוק מפתח API ב-Render Environment (DATA_PROVIDER + מפתח מתאים)."
     return completed.returncode == 0, output[-5000:]
 
 
@@ -2138,26 +2057,6 @@ def _scan_coverage_stats(df: pd.DataFrame) -> tuple[int, int, float]:
     return expected, usable or rows, coverage
 
 
-def _preflight_polygon_key_cached() -> tuple[bool, str]:
-    """Cached Polygon check — avoids HTTP on every sidebar rerun."""
-    active = resolve_polygon_api_key()
-    tail = polygon_key_tail(active) if active else ""
-    cache = st.session_state.get("_polygon_preflight_cache")
-    if (
-        isinstance(cache, dict)
-        and cache.get("ok") is not None
-        and cache.get("key_tail") == tail
-    ):
-        return bool(cache["ok"]), str(cache.get("msg", ""))
-    ok, msg = validate_polygon_api_key(active)
-    st.session_state["_polygon_preflight_cache"] = {
-        "ok": ok,
-        "msg": msg,
-        "key_tail": tail,
-    }
-    return ok, msg
-
-
 def _auto_scan_on_entry_enabled() -> bool:
     return os.getenv("AUTO_SCAN_ON_ENTRY", "true").lower() not in {"0", "false", "no"}
 
@@ -2178,13 +2077,6 @@ def _maybe_auto_scan_on_entry(profile_id: str) -> None:
         st.session_state["auto_scan_on_entry_done"] = True
         return
 
-    ok_pf, pf_msg = _preflight_polygon_key_cached()
-    if not ok_pf:
-        st.session_state["polygon_scan_error"] = pf_msg
-        st.session_state["auto_scan_on_entry_done"] = True
-        return
-
-    ensure_polygon_key_file()
     started, _msg = start_full_scan(profile_id)
     st.session_state["auto_scan_on_entry_done"] = True
     if started:
@@ -2404,19 +2296,13 @@ def _render_scan_controls(*, key_prefix: str = "sidebar_scan") -> None:
     )
     if scan_clicked:
         if _is_cloud_space():
-            ok_pf, pf_msg = _preflight_polygon_key_cached()
-            if not ok_pf:
-                st.error(pf_msg)
-            else:
-                ensure_polygon_key_file()
-                started, start_msg = start_full_scan(selected_profile)
-                if started:
-                    st.session_state["last_scan_profile"] = selected_profile
-                    st.session_state.pop("_polygon_preflight_cache", None)
-                    st.session_state.pop("auto_scan_on_entry_done", None)
-                    _rerun_app()
-                elif start_msg:
-                    st.error(start_msg)
+            started, start_msg = start_full_scan(selected_profile)
+            if started:
+                st.session_state["last_scan_profile"] = selected_profile
+                st.session_state.pop("auto_scan_on_entry_done", None)
+                _rerun_app()
+            elif start_msg:
+                st.error(start_msg)
         else:
             with st.spinner("סורק…"):
                 ok, output = run_professional_scan_from_dashboard(selected_profile)
@@ -2453,7 +2339,6 @@ def main() -> None:
     # --- Sidebar: report selection ---
     with st.sidebar:
         _render_scan_progress_panel()
-        _render_polygon_key_setup()
         _render_scan_sidebar_tab()
         if _scan_panel_enabled() and st.session_state.get("scan_panel_open", False):
             try:

@@ -24,7 +24,6 @@ from src.data import get_provider
 from src.pro_long_scanner import write_professional_long_report
 from src.scan_profiles import ScanProfile, apply_profile_to_env, get_profile
 from src.data.base import ProviderError
-from src.polygon_preflight import validate_polygon_api_key
 from src.scan_progress import clear_progress, write_progress
 
 
@@ -222,7 +221,7 @@ def _fetch_symbol(
         msg = str(exc)
         if "401" in msg or "Unknown API Key" in msg or "API Key" in msg:
             raise RuntimeError(
-                "מפתח Polygon לא תקין (401). הדבק מפתח חדש בדשבורד → שמור מפתח."
+                "מפתח נתוני שוק לא תקין (401). עדכן את מפתח ה-API ב-Render Environment."
             ) from exc
         return ticker, None, None
     except Exception:
@@ -347,17 +346,15 @@ def main() -> int:
     _setup_logging(settings.log_level)
     log = logging.getLogger("run_pro_scanner")
 
-    write_progress(2, "מאמת מפתח", message="בודק מפתח Polygon…")
-    provider = get_provider(settings)
-    if settings.provider == "polygon":
-        scan_key = settings.get_polygon_key()
-        ok, msg = validate_polygon_api_key(scan_key)
-        if not ok:
-            log.error("%s", msg)
-            clear_progress()
-            print("scanner_status=error")
-            print(f"error_message={msg}")
-            return 1
+    write_progress(2, "מתחיל", message=f"ספק נתונים: {settings.provider}")
+    try:
+        provider = get_provider(settings)
+    except RuntimeError as exc:
+        log.error("%s", exc)
+        clear_progress()
+        print("scanner_status=error")
+        print(f"error_message={exc}")
+        return 1
     tickers = _load_csv_universe(args.universe_csv) if args.universe_csv else _load_fixed_universe(settings)
     sector_map = _load_sector_map(args.sector_map)
     if args.limit:
