@@ -48,6 +48,11 @@ def main() -> int:
     parser.add_argument("--output-suffix", type=str, default="apex")
     parser.add_argument("--min-score", type=int, default=0, help="Filter rows below this Apex Score in CSV")
     parser.add_argument("--no-charts", action="store_true")
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="Force demo provider (ignore Polygon key on disk)",
+    )
     args = parser.parse_args()
 
     apply_render_fast_env()
@@ -55,8 +60,13 @@ def main() -> int:
 
     from src.polygon_key_store import apply_polygon_key_to_env, resolve_polygon_api_key
 
-    apply_polygon_key_to_env()
-    if os.getenv("DATA_PROVIDER", "polygon").strip().lower() == "polygon":
+    force_demo = args.demo or os.getenv("SCAN_ALLOW_DEMO", "").lower() in {"1", "true", "yes"}
+    if force_demo:
+        os.environ["DATA_PROVIDER"] = "demo"
+        os.environ.pop("POLYGON_API_KEY", None)
+    else:
+        apply_polygon_key_to_env()
+    if not force_demo and os.getenv("DATA_PROVIDER", "polygon").strip().lower() == "polygon":
         if not resolve_polygon_api_key():
             clear_progress()
             print("scanner_status=error")
@@ -122,14 +132,22 @@ def main() -> int:
     )
     results = scanner.scan(tickers, workers=workers)
 
-    if not results and settings.provider == "polygon":
+    if not results:
         clear_progress()
         print("scanner_status=error")
-        print("error_message=אין נתונים מ-Polygon — בדוק מפתח API ומנוי Stocks.")
+        if settings.provider == "polygon":
+            print("error_message=אין נתונים מ-Polygon — בדוק מפתח API ומנוי Stocks.")
+        else:
+            print("error_message=לא נמצאו מניות עם דאטה לסריקה.")
         return 1
 
     if args.min_score > 0:
         results = [r for r in results if r.apex_score >= args.min_score]
+        if not results:
+            clear_progress()
+            print("scanner_status=error")
+            print("error_message=אף מניה לא עברה את סף הציון המינימלי.")
+            return 1
 
     filename = settings.reporting.csv_filename_format.format(date=end.isoformat())
     filename = filename.replace("_report.csv", f"_{args.output_suffix}_report.csv")

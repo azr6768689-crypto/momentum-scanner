@@ -87,11 +87,15 @@ def fetch_intraday_stats(
     end = date.today()
     start = end - timedelta(days=3)
 
-    if hasattr(provider, "get_minute_bars"):
-        df = provider.get_minute_bars(sym, start, end, multiplier=multiplier, timespan=timespan)
-    elif hasattr(provider, "get_intraday_bars"):
-        df = provider.get_intraday_bars(sym, start, end)
-    else:
+    try:
+        if hasattr(provider, "get_minute_bars"):
+            df = provider.get_minute_bars(sym, start, end, multiplier=multiplier, timespan=timespan)
+        elif hasattr(provider, "get_intraday_bars"):
+            df = provider.get_intraday_bars(sym, start, end)
+        else:
+            return _empty_stats(sym)
+    except Exception as exc:
+        log.warning("Intraday fetch failed for %s: %s", sym, exc)
         return _empty_stats(sym)
 
     if df.empty:

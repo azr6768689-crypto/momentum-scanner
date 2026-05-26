@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -25,7 +26,11 @@ def main() -> int:
     from src.data import get_provider
     from src.polygon_key_store import apply_polygon_key_to_env
 
-    apply_polygon_key_to_env()
+    if os.getenv("SCAN_ALLOW_DEMO", "").lower() in {"1", "true", "yes"}:
+        os.environ["DATA_PROVIDER"] = "demo"
+        os.environ.pop("POLYGON_API_KEY", None)
+    else:
+        apply_polygon_key_to_env()
     settings = load_settings()
     ensure_directories(settings)
     provider = get_provider(settings)
