@@ -323,13 +323,19 @@ def _load_polygon_api_key_for_settings() -> str:
 
 
 def _normalize_data_provider(raw: str | None) -> str:
-    """Map DATA_PROVIDER to a known value; fix common HF Secrets mistakes."""
-    provider = (raw or "demo").lower().strip()
-    if provider in _VALID_DATA_PROVIDERS:
-        return provider
-    if os.getenv("POLYGON_API_KEY", "").strip():
+    """Map DATA_PROVIDER to a known value; prefer Polygon when a key exists."""
+    from src.polygon_key_store import resolve_polygon_api_key
+
+    explicit = (raw or "").lower().strip()
+    if explicit in _VALID_DATA_PROVIDERS:
+        if explicit == "demo":
+            return "demo"
+        return explicit
+    if resolve_polygon_api_key():
         return "polygon"
-    return "demo"
+    if os.getenv("RENDER", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return "polygon"
+    return "polygon" if os.getenv("POLYGON_API_KEY", "").strip() else "demo"
 
 
 def load_settings(config_dir: Path | None = None) -> Settings:

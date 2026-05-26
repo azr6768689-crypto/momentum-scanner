@@ -48,7 +48,12 @@ def _polygon_bulk_enabled(provider) -> bool:
 def _fetch_one(ticker: str, provider, start: date, end: date, trim_bars: int | None):
     try:
         df = provider.get_daily_bars(ticker, start, end)
-    except ProviderError:
+    except ProviderError as exc:
+        msg = str(exc)
+        if "401" in msg or "Unknown API Key" in msg:
+            raise RuntimeError(
+                "מפתח Polygon לא תקין (401). עדכן POLYGON_API_KEY ב-Render או בדשבורד."
+            ) from exc
         return ticker, None
     except Exception:
         return ticker, None

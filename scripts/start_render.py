@@ -87,9 +87,32 @@ def _start_streamlit() -> None:
     os.execvp(cmd[0], cmd)
 
 
+def _bootstrap_data_provider() -> None:
+    sys.path.insert(0, str(ROOT))
+    from src.polygon_key_store import apply_polygon_key_to_env, resolve_polygon_api_key
+
+    key = apply_polygon_key_to_env()
+    want = os.getenv("DATA_PROVIDER", "polygon").strip().lower()
+    if want == "demo" and os.getenv("SCAN_ALLOW_DEMO", "").lower() not in {"1", "true", "yes"}:
+        if key:
+            os.environ["DATA_PROVIDER"] = "polygon"
+            print("Polygon key found — using live market data (polygon).", flush=True)
+        else:
+            print(
+                "WARNING: DATA_PROVIDER=polygon but no POLYGON_API_KEY. "
+                "Set POLYGON_API_KEY in Render Environment or paste key in dashboard.",
+                flush=True,
+            )
+    elif key:
+        os.environ["DATA_PROVIDER"] = "polygon"
+    elif not resolve_polygon_api_key() and want == "polygon":
+        print("WARNING: Polygon selected without API key — scans will fail until key is set.", flush=True)
+
+
 def main() -> None:
     for path in ["data/reports", "data/cache", "data/universe", "logs"]:
         (ROOT / path).mkdir(parents=True, exist_ok=True)
+    _bootstrap_data_provider()
     _run_initial_scan()
     _start_streamlit()
 

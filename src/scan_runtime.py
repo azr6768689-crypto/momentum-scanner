@@ -65,8 +65,15 @@ def apply_render_fast_env() -> None:
 
 def build_scan_subprocess_env(base: dict | None = None) -> dict:
     """Copy process env and ensure scan paths; cap workers on cloud."""
+    from src.polygon_key_store import build_scan_process_env, resolve_polygon_api_key
+
     env = dict(base if base is not None else os.environ)
-    env.setdefault("DATA_PROVIDER", os.getenv("DATA_PROVIDER", "demo"))
+    scan_env, _key = build_scan_process_env(env)
+    env = scan_env
+    if resolve_polygon_api_key():
+        env["DATA_PROVIDER"] = "polygon"
+    else:
+        env.setdefault("DATA_PROVIDER", os.getenv("DATA_PROVIDER", "polygon"))
     env.setdefault("SCAN_PROGRESS_PATH", str(PROGRESS_PATH))
     env.setdefault("RENDER", os.getenv("RENDER", ""))
     apply_render_fast_env()

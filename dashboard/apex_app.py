@@ -33,7 +33,39 @@ def _is_cloud() -> bool:
 
 
 def _provider() -> str:
-    return os.getenv("DATA_PROVIDER", "demo").strip().lower()
+    from src.polygon_key_store import resolve_polygon_api_key
+
+    if resolve_polygon_api_key():
+        return "polygon"
+    return os.getenv("DATA_PROVIDER", "polygon").strip().lower()
+
+
+def _render_polygon_setup() -> None:
+    from src.polygon_key_store import (
+        polygon_key_source,
+        polygon_key_tail,
+        resolve_polygon_api_key,
+        save_polygon_api_key,
+    )
+
+    st.sidebar.markdown("### 🔑 נתוני שוק (Polygon)")
+    key = resolve_polygon_api_key()
+    if key:
+        st.sidebar.success(f"מחובר · מקור: {polygon_key_source()} · …{polygon_key_tail(key)}")
+        st.sidebar.caption("מחירים אמיתיים מ-Polygon (מותאמים לספליטים)")
+    else:
+        st.sidebar.error("אין מפתח Polygon — הסריקה לא תציג מחירי שוק אמיתיים")
+        pasted = st.sidebar.text_input("הדבק מפתח Polygon", type="password", key="apex_polygon_paste")
+        if st.sidebar.button("שמור מפתח", use_container_width=True):
+            try:
+                save_polygon_api_key(pasted)
+                st.sidebar.success("המפתח נשמר — הרץ סריקה מחדש")
+                st.rerun()
+            except ValueError as exc:
+                st.sidebar.error(str(exc))
+        st.sidebar.caption(
+            "או ב-Render: Environment → `POLYGON_API_KEY` + `DATA_PROVIDER=polygon` → Deploy"
+        )
 
 
 def _require_password() -> None:
@@ -262,12 +294,14 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
+    _render_polygon_setup()
+
     if _provider() == "demo":
         st.warning(
-            "**מצב דמו** — מחירים סינתטיים. לשוק אמיתי: `DATA_PROVIDER=polygon` + `POLYGON_API_KEY` ב-Render."
+            "**מצב דמו** — מחירים מדומים בלבד. להפעלת שוק אמיתי הזן מפתח Polygon בסרגל."
         )
-    elif _provider() == "polygon" and not clean_env_secret(os.getenv("POLYGON_API_KEY", "")):
-        st.error("Polygon נבחר ללא מפתח API.")
+    elif _provider() == "polygon":
+        st.success("**נתוני שוק אמיתיים** — Polygon (מחירים מותאמים, ~2,114 מניות נזילות US)")
 
     _cloud_scan_ui()
 

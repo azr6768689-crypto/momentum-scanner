@@ -6,7 +6,8 @@
 
 ```bash
 pip install -r requirements.txt
-export DATA_PROVIDER=demo   # או polygon + POLYGON_API_KEY
+export DATA_PROVIDER=polygon
+export POLYGON_API_KEY=your_key   # או שמור ב-data/.polygon_key
 python scripts/run_apex_scanner.py
 streamlit run dashboard/apex_app.py
 ```

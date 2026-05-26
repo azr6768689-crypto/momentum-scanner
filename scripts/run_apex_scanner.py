@@ -53,6 +53,24 @@ def main() -> int:
     apply_render_fast_env()
     write_progress(1, "מתחיל", message="Apex Scanner — מאתחל…")
 
+    from src.polygon_key_store import apply_polygon_key_to_env, resolve_polygon_api_key
+
+    apply_polygon_key_to_env()
+    if os.getenv("DATA_PROVIDER", "polygon").strip().lower() == "polygon":
+        if not resolve_polygon_api_key():
+            clear_progress()
+            print("scanner_status=error")
+            print("error_message=חסר POLYGON_API_KEY — הוסף מפתח ב-Render Environment או בדשבורד.")
+            return 1
+        from src.polygon_preflight import validate_polygon_api_key
+
+        ok, msg = validate_polygon_api_key()
+        if not ok:
+            clear_progress()
+            print("scanner_status=error")
+            print(f"error_message=מפתח Polygon לא תקין: {msg}")
+            return 1
+
     settings = load_settings()
     ensure_directories(settings)
     _setup_logging(settings.log_level)
@@ -103,6 +121,12 @@ def main() -> int:
         include_charts=not args.no_charts and os.getenv("SCAN_SKIP_CHART_JSON", "").lower() not in {"1", "true"},
     )
     results = scanner.scan(tickers, workers=workers)
+
+    if not results and settings.provider == "polygon":
+        clear_progress()
+        print("scanner_status=error")
+        print("error_message=אין נתונים מ-Polygon — בדוק מפתח API ומנוי Stocks.")
+        return 1
 
     if args.min_score > 0:
         results = [r for r in results if r.apex_score >= args.min_score]
