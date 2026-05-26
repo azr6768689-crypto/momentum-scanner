@@ -16,7 +16,13 @@ sys.path.insert(0, str(ROOT))
 from src.report_persistence import save_last_report
 from src.scan_profiles import apply_profile_to_env, get_profile
 from src.scan_progress import write_progress
-from src.scan_runtime import build_scan_subprocess_env, cap_scan_workers, is_render_host
+from src.scan_runtime import (
+    apply_render_fast_env,
+    build_scan_subprocess_env,
+    cap_scan_workers,
+    cloud_symbol_cap,
+    is_render_host,
+)
 
 
 def _merge_status(patch: dict) -> None:
@@ -71,6 +77,7 @@ def main() -> int:
     )
 
     apply_profile_to_env(profile)
+    apply_render_fast_env()
     env = build_scan_subprocess_env(os.environ.copy())
     workers = cap_scan_workers(env.get("SCAN_WORKERS"))
     env["SCAN_WORKERS"] = str(workers)
@@ -95,6 +102,9 @@ def main() -> int:
         "--workers",
         str(workers),
     ]
+    cap = cloud_symbol_cap()
+    if cap:
+        cmd.extend(["--limit", str(cap)])
     scan_timeout = _scan_timeout_seconds(profile)
     try:
         proc = subprocess.run(

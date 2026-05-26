@@ -8,23 +8,55 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PROGRESS_PATH = ROOT / "data" / "reports" / ".scan_progress.json"
 
+# Polygon / heavy profiles: keep low on Render Free (512MB).
 _RENDER_MAX_WORKERS = 4
+# Demo is in-process CPU only — more threads helps on multi-core hosts.
+_RENDER_DEMO_MAX_WORKERS = 8
 
 
 def is_render_host() -> bool:
     return os.getenv("RENDER", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def is_demo_provider() -> bool:
+    return os.getenv("DATA_PROVIDER", "demo").strip().lower() == "demo"
+
+
+def render_fast_mode() -> bool:
+    return os.getenv("SCAN_RENDER_FAST", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def cloud_symbol_cap() -> int | None:
+    """Optional universe cap on cloud (0 / unset = full universe)."""
+    raw = os.getenv("SCAN_CLOUD_MAX_SYMBOLS", "").strip()
+    if not raw or raw in {"0", "all", "full"}:
+        return None
+    if raw.isdigit() and int(raw) > 0:
+        return int(raw)
+    return None
+
+
 def cap_scan_workers(requested: int | str | None = None) -> int:
-    """Keep parallelism safe on Render Free (512MB) — avoids OOM freezes."""
-    raw = str(requested if requested is not None else os.getenv("SCAN_WORKERS", "2")).strip()
+    """Keep parallelism safe on Render Free — higher for demo-only fast scans."""
+    raw = str(requested if requested is not None else os.getenv("SCAN_WORKERS", "8")).strip()
     try:
         n = max(1, int(raw))
     except ValueError:
-        n = 2
+        n = 8
     if is_render_host():
-        return min(n, _RENDER_MAX_WORKERS)
+        ceiling = _RENDER_DEMO_MAX_WORKERS if is_demo_provider() else _RENDER_MAX_WORKERS
+        return min(n, ceiling)
     return min(n, 32)
+
+
+def apply_render_fast_env() -> None:
+    """Shorter history on cloud for sub-minute demo scans."""
+    if not (is_render_host() and render_fast_mode()):
+        return
+    os.environ.setdefault("SCAN_SKIP_SPARKLINES", "true")
+    os.environ.setdefault("SCAN_SKIP_WEEKLY_SPARKLINES", "true")
+    if is_demo_provider():
+        os.environ.setdefault("SCAN_TRIM_BARS", "63")
 
 
 def build_scan_subprocess_env(base: dict | None = None) -> dict:
@@ -33,6 +65,7 @@ def build_scan_subprocess_env(base: dict | None = None) -> dict:
     env.setdefault("DATA_PROVIDER", os.getenv("DATA_PROVIDER", "demo"))
     env.setdefault("SCAN_PROGRESS_PATH", str(PROGRESS_PATH))
     env.setdefault("RENDER", os.getenv("RENDER", ""))
+    apply_render_fast_env()
     workers = cap_scan_workers(env.get("SCAN_WORKERS"))
     analyze = env.get("SCAN_ANALYZE_WORKERS", "").strip()
     if analyze.isdigit():

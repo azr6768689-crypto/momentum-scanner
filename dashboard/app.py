@@ -378,8 +378,15 @@ def _render_sidebar_scan_hub() -> None:
     provider = os.getenv("DATA_PROVIDER", "demo")
     st.markdown("### סריקה")
     st.caption(f"{_deploy_build_label()} · {provider} · workers {CLOUD_SCAN_WORKERS}")
-    if provider not in ("demo",) and _is_cloud_space():
-        st.caption("למהירות: DATA_PROVIDER=demo בענן (ללא API)")
+    if _is_cloud_space():
+        if provider == "demo":
+            cap = os.getenv("SCAN_CLOUD_MAX_SYMBOLS", "0").strip()
+            if cap in ("", "0", "all", "full"):
+                st.caption("זמן משוער (דמו, מלא): כ־30–90 שנ׳ · אם יותר — רענן ובדוק שלא נשארה סריקה ישנה")
+            else:
+                st.caption(f"זמן משוער (דמו, {cap} מניות): כ־20–45 שנ׳")
+        else:
+            st.caption("Polygon/API איטי — לסריקה תוך דקה: DATA_PROVIDER=demo ב-Render")
 
     state = _cloud_scan_state()
     if state == "running":

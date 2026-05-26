@@ -27,13 +27,18 @@ services:
       - key: SCANNER_NEWS_TOP
         value: "100"
       - key: SCAN_WORKERS
-        value: "2"
+        value: "8"
       - key: SCAN_ANALYZE_WORKERS
-        value: "2"
+        value: "8"
+      - key: SCAN_RENDER_FAST
+        value: "true"
       - key: SCAN_SKIP_SPARKLINES
         value: "true"
       - key: SCAN_TIMEOUT_SECONDS
-        value: "1200"
+        value: "900"
+      # 0 = full universe (~2114). Set e.g. 600 if Free tier cannot finish under 1 min.
+      - key: SCAN_CLOUD_MAX_SYMBOLS
+        value: "0"
       - key: ENABLE_DASHBOARD_SCAN_BUTTON
         value: "true"
       - key: RUN_SCAN_ON_STARTUP

@@ -26,9 +26,11 @@ ENV_JSON='[
   {"key":"RENDER","value":"true"},
   {"key":"DATA_PROVIDER","value":"demo"},
   {"key":"SCAN_PROFILE","value":"simple"},
-  {"key":"SCAN_WORKERS","value":"2"},
-  {"key":"SCAN_ANALYZE_WORKERS","value":"2"},
-  {"key":"SCAN_TIMEOUT_SECONDS","value":"1200"},
+  {"key":"SCAN_WORKERS","value":"8"},
+  {"key":"SCAN_ANALYZE_WORKERS","value":"8"},
+  {"key":"SCAN_RENDER_FAST","value":"true"},
+  {"key":"SCAN_CLOUD_MAX_SYMBOLS","value":"0"},
+  {"key":"SCAN_TIMEOUT_SECONDS","value":"900"},
   {"key":"SCAN_SKIP_SPARKLINES","value":"true"},
   {"key":"AUTO_SCAN_ON_ENTRY","value":"false"},
   {"key":"RUN_SCAN_ON_STARTUP","value":"false"}
@@ -51,4 +53,4 @@ curl -fsS -X POST \
 
 echo ""
 echo "בוצע. בעוד 2–4 דקות: https://momentum-scanner-bbhl.onrender.com"
-echo "גרסה צפויה: scan-stable-v21"
+echo "גרסה צפויה: scan-fast-demo-v22"
