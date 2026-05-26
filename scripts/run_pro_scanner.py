@@ -241,6 +241,78 @@ def _fetch_symbol(
     return ticker, df, snap
 
 
+def _polygon_bulk_enabled(provider) -> bool:
+    if not hasattr(provider, "load_universe_daily_bars"):
+        return False
+    raw = os.getenv("SCAN_POLYGON_BULK", "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _load_universe_bulk(
+    fetch_tickers: list[str],
+    provider,
+    start: date,
+    end: date,
+    trim_bars: int | None,
+    log: logging.Logger,
+    *,
+    universe_size: int,
+    profile_id: str = "",
+    profile_label: str = "",
+) -> tuple[dict[str, pd.DataFrame], dict[str, Any]]:
+    from src.analytics.indicators import compute_snapshot
+
+    universe: dict[str, pd.DataFrame] = {}
+    snapshots: dict[str, Any] = {}
+    total_days = len(pd.bdate_range(start=pd.Timestamp(start), end=pd.Timestamp(end)))
+    label = profile_label or "סריקה"
+
+    def on_day(done_days: int, total_session_days: int) -> None:
+        stocks_done = min(
+            universe_size,
+            int(universe_size * done_days / max(total_session_days, 1)),
+        )
+        pct = 5 + int(70 * done_days / max(total_session_days, 1))
+        write_progress(
+            pct,
+            "טעינת נתונים",
+            done=stocks_done,
+            total=universe_size,
+            message=f"{label}: Polygon מרוכז {done_days}/{total_session_days} ימי מסחר",
+            profile_id=profile_id,
+            profile_label=profile_label,
+        )
+
+    log.info("Polygon bulk load: %d symbols, ~%d session days", len(fetch_tickers), total_days)
+    raw = provider.load_universe_daily_bars(fetch_tickers, start, end, on_progress=on_day)
+    done = 0
+    for ticker in fetch_tickers:
+        df = raw.get(ticker.upper().strip())
+        if df is None or df.empty:
+            continue
+        if trim_bars and len(df) > trim_bars:
+            df = df.tail(trim_bars).copy()
+        snap = compute_snapshot(df)
+        if snap is None:
+            continue
+        universe[ticker] = df
+        snapshots[ticker] = snap
+        done += 1
+        if done == 1 or done % 200 == 0 or done >= universe_size:
+            pct = 5 + int(70 * min(done, universe_size) / max(universe_size, 1))
+            write_progress(
+                pct,
+                "טעינת נתונים",
+                done=min(done, universe_size),
+                total=universe_size,
+                message=f"{label}: נטענו {min(done, universe_size):,} מתוך {universe_size:,} מניות",
+                profile_id=profile_id,
+                profile_label=profile_label,
+            )
+    log.info("Polygon bulk load finished: %d/%d usable", len(snapshots), len(fetch_tickers))
+    return universe, snapshots
+
+
 def _load_universe_parallel(
     fetch_tickers: list[str],
     provider,
@@ -254,6 +326,22 @@ def _load_universe_parallel(
     profile_id: str = "",
     profile_label: str = "",
 ) -> tuple[dict[str, pd.DataFrame], dict[str, Any]]:
+    if _polygon_bulk_enabled(provider) and len(fetch_tickers) >= 80:
+        try:
+            return _load_universe_bulk(
+                fetch_tickers,
+                provider,
+                start,
+                end,
+                trim_bars,
+                log,
+                universe_size=universe_size,
+                profile_id=profile_id,
+                profile_label=profile_label,
+            )
+        except Exception as exc:
+            log.warning("Bulk Polygon load failed; falling back to per-symbol: %s", exc)
+
     universe: dict[str, pd.DataFrame] = {}
     snapshots: dict[str, Any] = {}
     total = len(fetch_tickers)

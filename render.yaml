@@ -22,10 +22,6 @@ services:
         value: data/universe/polygon_liquid_us.csv
       - key: SCANNER_SECTOR_MAP
         value: data/universe/sector_map.csv
-      - key: SCANNER_INTRADAY_TOP
-        value: "50"
-      - key: SCANNER_NEWS_TOP
-        value: "100"
       - key: SCAN_WORKERS
         value: "8"
       - key: SCAN_ANALYZE_WORKERS
@@ -33,6 +29,10 @@ services:
       - key: SCAN_RENDER_FAST
         value: "true"
       - key: SCAN_SKIP_SPARKLINES
+        value: "true"
+      - key: SCAN_SKIP_BACKTEST
+        value: "true"
+      - key: SCAN_POLYGON_BULK
         value: "true"
       - key: SCAN_TIMEOUT_SECONDS
         value: "900"

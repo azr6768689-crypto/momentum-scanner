@@ -90,7 +90,7 @@ def _maybe_recover_stale_running(data: dict, pid: int) -> dict | None:
         "message": (
             f"הסריקה תקועה יותר מ-{int(_STALE_PROGRESS_SEC // 60)} דקות "
             f"(אחרון {pct}%). לחץ ▶ הרץ שוב. "
-            "ב-Render: השאר SCAN_WORKERS=2."
+            "ב-Render: השאר SCAN_PROFILE=simple ו-DATA_PROVIDER=demo."
         ),
         "log_tail": _tail_log(800),
     }

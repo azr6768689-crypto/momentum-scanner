@@ -55,8 +55,12 @@ def apply_render_fast_env() -> None:
         return
     os.environ.setdefault("SCAN_SKIP_SPARKLINES", "true")
     os.environ.setdefault("SCAN_SKIP_WEEKLY_SPARKLINES", "true")
+    os.environ.setdefault("SCAN_SKIP_BACKTEST", "true")
     if is_demo_provider():
         os.environ.setdefault("SCAN_TRIM_BARS", "63")
+    else:
+        os.environ.setdefault("SCAN_TRIM_BARS", "126")
+        os.environ.setdefault("SCAN_POLYGON_BULK", "true")
 
 
 def build_scan_subprocess_env(base: dict | None = None) -> dict:

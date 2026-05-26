@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import defaultdict
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 import requests
@@ -95,6 +96,73 @@ class PolygonProvider(DataProvider):
     @staticmethod
     def normalize_symbol(symbol: str) -> str:
         return symbol.upper().strip().replace(".", "-")
+
+    def load_universe_daily_bars(
+        self,
+        symbols: list[str],
+        start: date,
+        end: date,
+        *,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> dict[str, pd.DataFrame]:
+        """Load many tickers via Polygon grouped daily bars (one API call per session day).
+
+        Much faster than per-symbol range requests for full-universe scans (~150 calls
+        vs thousands). Falls back to empty frames for symbols with no bars in range.
+        """
+        wanted = {self.normalize_symbol(s) for s in symbols if str(s).strip()}
+        if not wanted:
+            return {}
+
+        buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        session_days = pd.bdate_range(start=pd.Timestamp(start), end=pd.Timestamp(end))
+        total_days = len(session_days)
+        pause = 0.11  # ~9 req/s — under typical starter tier limits
+
+        for idx, ts in enumerate(session_days, start=1):
+            day = ts.date()
+            try:
+                rows = self._retry(self._fetch_grouped_day)(day)
+            except SymbolNotFoundError:
+                rows = []
+            except Exception as exc:
+                log.warning("Grouped daily fetch failed for %s: %s", day, exc)
+                rows = []
+            for row in rows:
+                sym = str(row.get("T") or "").upper().strip()
+                if sym in wanted:
+                    buckets[sym].append(row)
+            if on_progress is not None:
+                on_progress(idx, total_days)
+            if idx < total_days:
+                time.sleep(pause)
+
+        out: dict[str, pd.DataFrame] = {}
+        for sym in wanted:
+            rows = buckets.get(sym) or []
+            if not rows:
+                out[sym] = self.empty_frame()
+                continue
+            df = pd.DataFrame(rows)
+            date_values = pd.to_datetime(df["t"], unit="ms").dt.tz_localize(None).dt.normalize()
+            frame = pd.DataFrame(
+                {
+                    "open": df["o"].astype("float64"),
+                    "high": df["h"].astype("float64"),
+                    "low": df["l"].astype("float64"),
+                    "close": df["c"].astype("float64"),
+                    "volume": df["v"].astype("float64"),
+                },
+                index=pd.DatetimeIndex(date_values, name="date"),
+            )
+            frame = frame.sort_index()
+            frame = frame[~frame.index.duplicated(keep="last")]
+            mask = (frame.index >= pd.Timestamp(start)) & (frame.index <= pd.Timestamp(end))
+            frame = frame.loc[mask]
+            if not frame.empty:
+                self._cache.write(sym, frame)
+            out[sym] = frame[OHLCV_COLUMNS] if not frame.empty else self.empty_frame()
+        return out
 
     def get_daily_bars(self, symbol: str, start: date, end: date) -> pd.DataFrame:
         sym = self.normalize_symbol(symbol)
@@ -227,6 +295,27 @@ class PolygonProvider(DataProvider):
             payload = resp.json()
             results = payload.get("results") or []
             return [item for item in results if isinstance(item, dict)]
+
+    def _fetch_grouped_day(self, day: date) -> list[dict[str, Any]]:
+        url = f"{_POLYGON_BASE}/v2/aggs/grouped/locale/us/market/stocks/{day.isoformat()}"
+        params = {"adjusted": "true", "apiKey": self._api_key}
+        resp = self._session.get(url, params=params, timeout=60)
+        if resp.status_code == 404:
+            return []
+        if resp.status_code == 429:
+            retry_after = resp.headers.get("Retry-After")
+            try:
+                sleep_for = float(retry_after) if retry_after else 10.0
+            except ValueError:
+                sleep_for = 10.0
+            log.warning("Polygon grouped rate limit; sleeping %.0fs", sleep_for)
+            time.sleep(max(1.0, min(sleep_for, 60.0)))
+            raise RateLimitError("Polygon grouped HTTP 429")
+        if resp.status_code != 200:
+            raise ProviderError(f"Polygon grouped HTTP {resp.status_code} for {day}: {resp.text[:200]}")
+        payload = resp.json()
+        results = payload.get("results") or []
+        return [item for item in results if isinstance(item, dict)]
 
     def _fetch_daily(self, symbol: str, start: date, end: date) -> pd.DataFrame:
         return self._fetch_aggregate(symbol, start, end, 1, "day")

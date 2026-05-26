@@ -367,6 +367,21 @@ def _scan_status_fragment() -> None:
         _rerun_app()
 
 
+def _render_data_provider_banner() -> None:
+    """Warn when prices are synthetic (demo) or remind how to enable live Polygon."""
+    provider = os.getenv("DATA_PROVIDER", "demo").strip().lower() or "demo"
+    if provider == "demo":
+        st.warning(
+            "**מצב דמו פעיל** — המחירים, האחוזים והדפוסים בדוח הם **סינתטיים** (לא שוק אמיתי). "
+            "לנתוני שוק אמיתיים: ב-Render → Environment → `DATA_PROVIDER=polygon` + מפתח `POLYGON_API_KEY`, "
+            "ואז Deploy מחדש. עמודת **מקור נתונים** בדוח מציינת את המצב."
+        )
+    elif provider == "polygon" and not clean_env_secret(os.getenv("POLYGON_API_KEY", "")):
+        st.error(
+            "**Polygon נבחר אבל אין מפתח** — הוסף `POLYGON_API_KEY` ב-Environment של Render והפעל Deploy מחדש."
+        )
+
+
 def _render_sidebar_scan_hub() -> None:
     """One scan block: status + profile + run (no duplicate progress / toggles)."""
     if not _scan_panel_enabled():
@@ -378,15 +393,17 @@ def _render_sidebar_scan_hub() -> None:
     provider = os.getenv("DATA_PROVIDER", "demo")
     st.markdown("### סריקה")
     st.caption(f"{_deploy_build_label()} · {provider} · workers {CLOUD_SCAN_WORKERS}")
+    if provider == "demo":
+        st.caption("⚠ דמו = נתונים מדומים · לא מחירי בורסה")
     if _is_cloud_space():
         if provider == "demo":
             cap = os.getenv("SCAN_CLOUD_MAX_SYMBOLS", "0").strip()
             if cap in ("", "0", "all", "full"):
-                st.caption("זמן משוער (דמו, מלא): כ־30–90 שנ׳ · אם יותר — רענן ובדוק שלא נשארה סריקה ישנה")
+                st.caption("זמן משוער (דמו, מלא): כ־20–45 שנ׳ · רמה: פשוטה")
             else:
-                st.caption(f"זמן משוער (דמו, {cap} מניות): כ־20–45 שנ׳")
+                st.caption(f"זמן משוער (דמו, {cap} מניות): כ־15–30 שנ׳")
         else:
-            st.caption("Polygon/API איטי — לסריקה תוך דקה: DATA_PROVIDER=demo ב-Render")
+            st.caption("Polygon מרוכז: כ־3–8 דק׳ לסריקה מלאה (תלוי במפתח ובקאש)")
 
     state = _cloud_scan_state()
     if state == "running":
@@ -2329,6 +2346,7 @@ def render_signal_card(row: pd.Series) -> None:
 def main() -> None:
     _require_dashboard_password()
     _handle_cloud_scan_lifecycle()
+    _render_data_provider_banner()
     # --- Sidebar: report selection ---
     with st.sidebar:
         _render_sidebar_scan_hub()

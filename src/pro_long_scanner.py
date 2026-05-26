@@ -21,6 +21,7 @@ from src.analytics.indicators import IndicatorSnapshot
 
 HEBREW_COLUMNS = [
     "דירוג",
+    "מקור נתונים",
     "סימבול",
     "סקטור",
     "חוזק סקטור 20 יום %",
@@ -155,6 +156,16 @@ class LongSetup:
     hourly_sparkline: str
 
 
+def _data_source_label() -> str:
+    provider = os.getenv("DATA_PROVIDER", "demo").strip().lower() or "demo"
+    labels = {
+        "demo": "דמו (סינתטי — לא מחירי שוק)",
+        "polygon": "Polygon (מחירים מותאמים)",
+        "tiingo": "Tiingo",
+    }
+    return labels.get(provider, provider)
+
+
 def build_professional_long_rows(
     tickers: list[str],
     universe: dict[str, pd.DataFrame],
@@ -163,6 +174,7 @@ def build_professional_long_rows(
 ) -> list[dict[str, Any]]:
     """Return ranked Hebrew rows for the fixed long-only universe."""
     sector_map = sector_map or {}
+    data_source = _data_source_label()
     spy_df = universe.get("SPY")
     qqq_df = universe.get("QQQ")
     market = _market_regime(snapshots.get("SPY"), snapshots.get("QQQ"), snapshots.get("IWM"))
@@ -231,6 +243,7 @@ def build_professional_long_rows(
     for rank, setup in enumerate(setups, start=1):
         rows.append({
             "דירוג": rank,
+            "מקור נתונים": data_source,
             "סימבול": setup.ticker,
             "סקטור": setup.sector,
             "חוזק סקטור 20 יום %": _round_or_blank(setup.sector_strength_20d),
@@ -460,7 +473,7 @@ def _analyze_ticker(
     skip_all_sparklines = _env_on("SCAN_SKIP_SPARKLINES")
     compact_charts = _env_on("SCAN_FAST_CHARTS") or _env_on("SCAN_FAST")
     skip_weekly = _env_on("SCAN_SKIP_WEEKLY_SPARKLINES") or skip_all_sparklines
-    technicals = _technical_state(df)
+    technicals = _technical_state(df.tail(min(len(df), 120)))
 
     score = 0
     reasons: list[str] = []
@@ -859,6 +872,15 @@ def _volume_dry_up_candidate(df: pd.DataFrame, snap: IndicatorSnapshot) -> bool:
 
 
 def _technical_state(df: pd.DataFrame) -> dict[str, Any]:
+    if df is None or df.empty or len(df) < 30:
+        return {
+            "rsi": None,
+            "macd_label": "אין דאטה",
+            "adx": None,
+            "cci": None,
+            "score_bonus": 0,
+            "reasons": [],
+        }
     close = df["close"]
     high = df["high"]
     low = df["low"]
