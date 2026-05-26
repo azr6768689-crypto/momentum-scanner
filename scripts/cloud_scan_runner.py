@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT))
 from src.report_persistence import save_last_report
 from src.scan_profiles import apply_profile_to_env, get_profile
 from src.scan_progress import write_progress
-from src.scan_runtime import build_scan_subprocess_env
+from src.scan_runtime import build_scan_subprocess_env, cap_scan_workers, is_render_host
 
 
 def _merge_status(patch: dict) -> None:
@@ -28,6 +28,25 @@ def _merge_status(patch: dict) -> None:
             existing = {}
     existing.update(patch)
     STATUS.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _parse_scan_output(text: str) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for line in text.splitlines():
+        if "=" in line:
+            key, _, val = line.partition("=")
+            parsed[key.strip()] = val.strip()
+    return parsed
+
+
+def _scan_timeout_seconds(profile) -> int:
+    override = os.getenv("SCAN_TIMEOUT_SECONDS", "").strip()
+    if override.isdigit():
+        return int(override)
+    base = profile.timeout_seconds + 180
+    if is_render_host():
+        return min(base, 1200)
+    return max(base, 600)
 
 
 def main() -> int:
@@ -48,15 +67,18 @@ def main() -> int:
         message=f"{profile.label_he}: מאתחל סריקה…",
         profile_id=profile_id,
         profile_label=profile.label_he,
+        force=True,
     )
 
     apply_profile_to_env(profile)
     env = build_scan_subprocess_env(os.environ.copy())
-    env["SCAN_WORKERS"] = os.getenv("SCAN_WORKERS", "2")
+    workers = cap_scan_workers(env.get("SCAN_WORKERS"))
+    env["SCAN_WORKERS"] = str(workers)
+    env["SCAN_ANALYZE_WORKERS"] = str(workers)
     write_progress(
         4,
         "מתחיל",
-        message=f"{profile.label_he}: טוען נתונים ({env.get('DATA_PROVIDER', 'demo')})…",
+        message=f"{profile.label_he}: טוען נתונים ({env.get('DATA_PROVIDER', 'demo')}, {workers} workers)…",
         profile_id=profile_id,
         profile_label=profile.label_he,
     )
@@ -71,29 +93,34 @@ def main() -> int:
         "--profile",
         profile_id,
         "--workers",
-        env["SCAN_WORKERS"],
+        str(workers),
     ]
+    scan_timeout = _scan_timeout_seconds(profile)
     try:
-        timeout_override = os.getenv("SCAN_TIMEOUT_SECONDS", "").strip()
-        if timeout_override.isdigit():
-            scan_timeout = int(timeout_override)
-        else:
-            scan_timeout = max(profile.timeout_seconds + 120, 3600)
         proc = subprocess.run(
             cmd,
             cwd=str(ROOT),
-            stdout=sys.stdout,
-            stderr=subprocess.STDOUT,
+            capture_output=True,
             text=True,
             timeout=scan_timeout,
             env=env,
         )
-    except subprocess.TimeoutExpired:
+        stdout = proc.stdout or ""
+        stderr = proc.stderr or ""
+        combined = stdout + ("\n" + stderr if stderr else "")
+        LOG_PATH.write_text(combined, encoding="utf-8")
+    except subprocess.TimeoutExpired as exc:
+        partial = (exc.stdout or "") + ("\n" + (exc.stderr or "") if exc.stderr else "")
+        if partial:
+            LOG_PATH.write_text(partial, encoding="utf-8")
         STATUS.write_text(
             json.dumps(
                 {
                     "state": "error",
-                    "message": f"timeout אחרי {scan_timeout} שניות — נסה רמת simple או SCAN_WORKERS=2",
+                    "message": (
+                        f"timeout אחרי {scan_timeout} שניות — "
+                        "השאר רמת simple ו-SCAN_WORKERS=2"
+                    ),
                 },
                 ensure_ascii=False,
             ),
@@ -101,24 +128,12 @@ def main() -> int:
         )
         return 1
 
-    if LOG_PATH.exists():
-        try:
-            out = LOG_PATH.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            out = ""
-    parsed: dict[str, str] = {}
-    for line in out.splitlines():
-        if "=" in line:
-            key, _, val = line.partition("=")
-            parsed[key.strip()] = val.strip()
-
-    err_msg = (
-        parsed.get("error_message")
-        or parsed.get("error")
-        or ""
-    ).strip()
+    parsed = _parse_scan_output(stdout)
+    err_msg = (parsed.get("error_message") or parsed.get("error") or "").strip()
     report = parsed.get("report_file", "")
-    if proc.returncode == 0:
+    report_path = STATUS.parent / report if report else None
+
+    if proc.returncode == 0 and report and report_path and report_path.is_file():
         requested = int(parsed.get("symbols_requested", "0") or 0)
         usable = int(parsed.get("symbols_with_usable_data", "0") or 0)
         rows = int(parsed.get("report_rows", "0") or 0)
@@ -139,22 +154,39 @@ def main() -> int:
             ),
             encoding="utf-8",
         )
-        if report:
-            save_last_report(report, profile_id)
+        save_last_report(report, profile_id)
+        write_progress(
+            100,
+            "הושלם",
+            message=f"{profile.label_he}: הסריקה הסתיימה",
+            profile_id=profile_id,
+            profile_label=profile.label_he,
+            force=True,
+        )
         return 0
+
+    if proc.returncode == 0 and not report:
+        err_msg = err_msg or "הסריקה הסתיימה בלי קובץ דוח — נסה שוב."
+
+    log_tail = ""
+    if LOG_PATH.exists():
+        try:
+            log_tail = LOG_PATH.read_text(encoding="utf-8", errors="ignore")[-5000:]
+        except OSError:
+            pass
 
     STATUS.write_text(
         json.dumps(
             {
                 "state": "error",
-                "message": err_msg or "הסריקה נכשלה — בדוק מפתח Polygon או לוג בסרגל הצד.",
-                "log": out[-5000:],
+                "message": err_msg or "הסריקה נכשלה — בדוק לוג בסרגל הצד.",
+                "log": log_tail,
             },
             ensure_ascii=False,
         ),
         encoding="utf-8",
     )
-    return proc.returncode
+    return proc.returncode or 1
 
 
 if __name__ == "__main__":

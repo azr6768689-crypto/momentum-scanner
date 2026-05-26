@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import os
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any
 
@@ -181,13 +181,50 @@ def build_professional_long_rows(
             sector_stats.get(sector, _neutral_sector("לא זמין")),
         )
 
+    from src.scan_progress import write_progress
+    from src.scan_runtime import cap_scan_workers
+
     workers_raw = os.getenv("SCAN_ANALYZE_WORKERS", "").strip()
-    workers = int(workers_raw) if workers_raw.isdigit() and int(workers_raw) > 0 else min(8, os.cpu_count() or 4)
-    if len(tickers) >= 80 and workers > 1:
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            setups = list(pool.map(_analyze_one, tickers))
+    if workers_raw.isdigit() and int(workers_raw) > 0:
+        workers = cap_scan_workers(int(workers_raw))
     else:
-        setups = [_analyze_one(t) for t in tickers]
+        workers = cap_scan_workers(min(8, os.cpu_count() or 4))
+    profile_id = os.getenv("SCAN_PROFILE", "").strip()
+    profile_label = os.getenv("SCAN_PROFILE_LABEL", "").strip() or "סריקה"
+    total = len(tickers)
+    setups: list[LongSetup] = []
+    if len(tickers) >= 80 and workers > 1:
+        done = 0
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_analyze_one, t): t for t in tickers}
+            for future in as_completed(futures):
+                setups.append(future.result())
+                done += 1
+                if done == 1 or done % 40 == 0 or done == total:
+                    pct = 78 + int(10 * done / max(total, 1))
+                    write_progress(
+                        pct,
+                        "דירוג",
+                        done=done,
+                        total=total,
+                        message=f"{profile_label}: מדרג {done:,}/{total:,}",
+                        profile_id=profile_id,
+                        profile_label=profile_label,
+                    )
+    else:
+        for idx, t in enumerate(tickers, start=1):
+            setups.append(_analyze_one(t))
+            if idx == 1 or idx % 40 == 0 or idx == total:
+                pct = 78 + int(10 * idx / max(total, 1))
+                write_progress(
+                    pct,
+                    "דירוג",
+                    done=idx,
+                    total=total,
+                    message=f"{profile_label}: מדרג {idx:,}/{total:,}",
+                    profile_id=profile_id,
+                    profile_label=profile_label,
+                )
     setups.sort(key=lambda setup: (setup.probability, setup.institutional_score, setup.ticker), reverse=True)
 
     rows: list[dict[str, Any]] = []

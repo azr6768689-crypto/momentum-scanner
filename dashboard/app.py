@@ -47,13 +47,15 @@ from src.report_persistence import last_report_path, load_last_report, save_last
 # Path constants
 REPORTS_DIR = ROOT / "data" / "reports"
 
-# Cloud scan parallelism (Render Free: use 2 in render.yaml to avoid OOM).
+# Cloud scan parallelism — capped on Render to avoid OOM freezes.
 def _cloud_scan_workers() -> int:
-    raw = os.getenv("SCAN_WORKERS", "6").strip()
+    from src.scan_runtime import cap_scan_workers
+
+    raw = os.getenv("SCAN_WORKERS", "2").strip()
     try:
-        return max(1, min(int(raw), 12))
+        return cap_scan_workers(int(raw))
     except ValueError:
-        return 6
+        return cap_scan_workers(2)
 
 
 CLOUD_SCAN_WORKERS = _cloud_scan_workers()
@@ -284,7 +286,8 @@ def _restore_persisted_scan_prefs() -> None:
         st.session_state.setdefault("last_scan_report_file", meta["report_file"])
     if meta.get("profile"):
         st.session_state.setdefault("last_scan_profile", meta["profile"])
-    st.session_state["auto_scan_on_entry_done"] = True
+    if meta.get("report_file"):
+        st.session_state.setdefault("auto_scan_on_entry_done", True)
 
 
 def _handle_cloud_scan_lifecycle() -> None:
@@ -313,7 +316,7 @@ def _scan_progress_details() -> tuple[int, str, str, int, int]:
 
         job = get_status()
         state = str(job.get("state", "idle"))
-        if state == "idle":
+        if state in ("idle", "cancelled"):
             return 0, state, "", 0, 0
         if state == "ok":
             return 100, state, str(job.get("message", "הושלם")), 0, 0
@@ -349,10 +352,19 @@ def _render_scan_status_compact() -> None:
         st.error((msg or "שגיאה")[:300])
 
 
-@st.fragment(run_every=timedelta(seconds=4))
+@st.fragment(run_every=timedelta(seconds=3))
 def _scan_status_fragment() -> None:
-    if _cloud_scan_state() == "running":
+    state = _cloud_scan_state()
+    prev = st.session_state.get("_scan_poll_prev_state")
+    if state == "running":
+        st.session_state["_scan_poll_prev_state"] = "running"
         _render_scan_status_compact()
+        return
+    if prev == "running" and state in ("ok", "error"):
+        st.session_state["_scan_poll_prev_state"] = state
+        if state == "ok":
+            _maybe_reload_after_scan_ok()
+        _rerun_app()
 
 
 def _render_sidebar_scan_hub() -> None:
@@ -365,7 +377,7 @@ def _render_sidebar_scan_hub() -> None:
 
     provider = os.getenv("DATA_PROVIDER", "demo")
     st.markdown("### סריקה")
-    st.caption(f"{_deploy_build_label()} · {provider} · workers {os.getenv('SCAN_WORKERS', '16')}")
+    st.caption(f"{_deploy_build_label()} · {provider} · workers {CLOUD_SCAN_WORKERS}")
     if provider not in ("demo",) and _is_cloud_space():
         st.caption("למהירות: DATA_PROVIDER=demo בענן (ללא API)")
 
@@ -378,6 +390,8 @@ def _render_sidebar_scan_hub() -> None:
             st.success(f"דוח שמור: {saved['report_file']}")
         else:
             st.success("הסריקה הושלמה")
+    elif state == "cancelled":
+        st.warning("הסריקה בוטלה")
     elif state == "idle":
         saved = load_last_report()
         if saved.get("report_file") and _cloud_scan_state() != "running":

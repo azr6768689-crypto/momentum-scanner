@@ -12,6 +12,10 @@ ROOT = Path(__file__).resolve().parent.parent
 PROGRESS_PATH = ROOT / "data" / "reports" / ".scan_progress.json"
 
 
+def _progress_path() -> Path:
+    return Path(os.getenv("SCAN_PROGRESS_PATH", str(PROGRESS_PATH)))
+
+
 def write_progress(
     percent: int,
     phase: str,
@@ -21,8 +25,9 @@ def write_progress(
     message: str = "",
     profile_id: str = "",
     profile_label: str = "",
+    force: bool = False,
 ) -> None:
-    path = os.getenv("SCAN_PROGRESS_PATH", str(PROGRESS_PATH))
+    path = _progress_path()
     payload = {
         "percent": max(0, min(100, int(percent))),
         "phase": phase,
@@ -31,28 +36,51 @@ def write_progress(
         "message": message or phase,
         "profile_id": profile_id,
         "profile_label": profile_label,
+        "updated_at": time.time(),
     }
     global _last_disk_write
     now = time.time()
-    if 0 < int(percent) < 100 and now - _last_disk_write < 1.5:
+    if (
+        not force
+        and 0 < int(percent) < 100
+        and now - _last_disk_write < 1.0
+    ):
         return
     _last_disk_write = now
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def read_progress() -> dict:
-    path = Path(os.getenv("SCAN_PROGRESS_PATH", str(PROGRESS_PATH)))
+    path = _progress_path()
     if not path.exists():
         return {"percent": 0, "phase": "", "done": 0, "total": 0, "message": ""}
+    for _ in range(3):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            time.sleep(0.05)
+        except OSError:
+            break
+    return {"percent": 0, "phase": "", "done": 0, "total": 0, "message": ""}
+
+
+def progress_last_updated() -> float | None:
+    path = _progress_path()
+    if not path.is_file():
+        return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {"percent": 0, "phase": "", "done": 0, "total": 0, "message": ""}
+        data = read_progress()
+        if data.get("updated_at"):
+            return float(data["updated_at"])
+        return path.stat().st_mtime
+    except OSError:
+        return None
 
 
 def clear_progress() -> None:
-    path = Path(os.getenv("SCAN_PROGRESS_PATH", str(PROGRESS_PATH)))
+    path = _progress_path()
     if path.exists():
         path.unlink(missing_ok=True)

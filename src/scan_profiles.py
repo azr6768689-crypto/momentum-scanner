@@ -131,6 +131,7 @@ def get_profile(profile_id: str | None) -> ScanProfile:
 def apply_profile_to_env(profile: ScanProfile) -> None:
     """Set process env vars consumed by the scanner and report builder."""
     os.environ["SCAN_PROFILE"] = profile.id
+    os.environ["SCAN_PROFILE_LABEL"] = profile.label_he
     os.environ["SCAN_FAST"] = "1" if profile.fast_parallel else "0"
     os.environ["SCAN_FAST_CHARTS"] = "1" if profile.id == "simple" else "0"
     os.environ["SCAN_SKIP_BACKTEST"] = "1" if profile.skip_per_ticker_backtest else "0"

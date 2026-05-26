@@ -8,7 +8,7 @@ import json
 import logging
 import os
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -86,14 +86,18 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 def _default_workers() -> int:
+    from src.scan_runtime import cap_scan_workers, is_render_host
+
     explicit = os.getenv("SCAN_WORKERS", "").strip()
     if explicit.isdigit() and int(explicit) > 0:
-        return int(explicit)
+        return cap_scan_workers(int(explicit))
+    if is_render_host():
+        return cap_scan_workers(2)
     provider = os.getenv("DATA_PROVIDER", "demo").lower()
     cpu = os.cpu_count() or 4
-    if os.getenv("RENDER", "").lower() == "true" or os.getenv("SPACE_ID"):
-        return 16 if provider in {"demo", "tiingo"} else 6
-    return min(32, max(8, cpu * 2))
+    if os.getenv("SPACE_ID"):
+        return cap_scan_workers(8 if provider in {"demo", "tiingo"} else 4)
+    return min(32, max(4, cpu * 2))
 
 
 def _load_sector_map(path: Path) -> dict[str, str]:
@@ -254,13 +258,24 @@ def _load_universe_parallel(
     snapshots: dict[str, Any] = {}
     total = len(fetch_tickers)
     done = 0
+    symbol_timeout = int(os.getenv("SCAN_SYMBOL_TIMEOUT", "90") or "90")
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
             pool.submit(_fetch_symbol, ticker, provider, start, end, trim_bars=trim_bars): ticker
             for ticker in fetch_tickers
         }
         for future in as_completed(futures):
-            ticker, df, snap = future.result()
+            ticker = futures[future]
+            try:
+                ticker, df, snap = future.result(timeout=symbol_timeout)
+            except FuturesTimeoutError:
+                log.warning("Timeout loading %s after %ss", ticker, symbol_timeout)
+                done += 1
+                continue
+            except Exception as exc:
+                log.warning("Failed loading %s: %s", ticker, exc)
+                done += 1
+                continue
             done += 1
             if df is not None and snap is not None:
                 universe[ticker] = df
