@@ -38,6 +38,10 @@ services:
         value: "true"
       - key: SCAN_POLYGON_BULK
         value: "true"
+      - key: APEX_LIVE_REFRESH_SEC
+        value: "60"
+      - key: APEX_LIVE_WORKERS
+        value: "4"
       - key: SCAN_TIMEOUT_SECONDS
         value: "900"
       # 0 = full universe (~2114). Set e.g. 600 if Free tier cannot finish under 1 min.

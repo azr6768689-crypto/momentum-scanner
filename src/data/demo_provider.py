@@ -236,6 +236,48 @@ class DemoProvider(DataProvider):
         starting_price = self._starting_price_for(sym)
         return _generate_ohlcv(sym, start, end, starting_price=starting_price)
 
+    def get_minute_bars(
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+        *,
+        multiplier: int = 5,
+        timespan: str = "minute",
+    ) -> pd.DataFrame:
+        """Synthetic intraday bars for live UI testing without Polygon."""
+        _ = (multiplier, timespan)
+        sym = self.normalize_symbol(symbol)
+        daily = self.get_daily_bars(sym, end - timedelta(days=5), end)
+        if daily.empty:
+            return self.empty_frame()
+        last = daily.iloc[-1]
+        idx = pd.date_range(
+            start=pd.Timestamp(date.today()).replace(hour=9, minute=30),
+            end=pd.Timestamp(date.today()).replace(hour=16, minute=0),
+            freq="5min",
+        )
+        n = len(idx)
+        if n == 0:
+            return self.empty_frame()
+        rng = np.random.default_rng(_seed_for(sym) + 7)
+        path = np.linspace(float(last["open"]), float(last["close"]), n)
+        noise = rng.normal(0, float(last["close"]) * 0.002, size=n)
+        close = path + noise
+        high = np.maximum(close, float(last["high"])) * (1 + rng.uniform(0, 0.002, n))
+        low = np.minimum(close, float(last["low"])) * (1 - rng.uniform(0, 0.002, n))
+        vol = float(last["volume"]) / max(n, 1) * rng.uniform(0.5, 1.5, n)
+        return pd.DataFrame(
+            {
+                "open": close,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": vol,
+            },
+            index=pd.DatetimeIndex(idx, name="date"),
+        )[OHLCV_COLUMNS]
+
     def get_metadata(self, symbol: str) -> SymbolMetadata:
         """Deterministic synthetic metadata for demo mode.
 

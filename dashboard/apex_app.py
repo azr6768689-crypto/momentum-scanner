@@ -355,10 +355,23 @@ def main() -> None:
     else:
         c4.metric("מוביל", "—")
 
-    tab_table, tab_chart, tab_sectors = st.tabs(["📊 לוח מובילים", "📈 גרף", "🏭 סקטורים"])
+    from dashboard.apex_live_ui import render_alerts_tab, render_live_tab, render_presets_tab
+
+    tab_table, tab_live, tab_presets, tab_alerts, tab_chart, tab_sectors = st.tabs(
+        ["📊 יומי", "⚡ Live", "📋 Presets", "🔔 התראות", "📈 גרף", "🏭 סקטורים"]
+    )
 
     with tab_table:
         _styled_table(filt.head(200))
+
+    with tab_live:
+        render_live_tab(df)
+
+    with tab_presets:
+        render_presets_tab(df)
+
+    with tab_alerts:
+        render_alerts_tab()
 
     with tab_chart:
         symbols = filt["סימבול"].astype(str).tolist()[:300]

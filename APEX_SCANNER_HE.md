@@ -31,6 +31,19 @@ DATA_PROVIDER=polygon
 POLYGON_API_KEY=...
 ```
 
+## Live (שכבת Trade Ideas)
+
+בדשבורד → לשוניות:
+- **⚡ Live** — רענון תוך-יומי (5 דקות), RVOL, VWAP, התראות
+- **📋 Presets** — סריקות מוכנות על הדוח היומי
+- **🔔 התראות** — היסטוריה וכללים
+
+```bash
+python scripts/run_apex_live_alerts.py --from-report data/reports/2026-05-26_apex_report.csv --top 50
+```
+
+משתני סביבה: `APEX_LIVE_REFRESH_SEC=60`, `APEX_LIVE_WORKERS=4`
+
 ## ביצועים (דמו, ~2,114 מניות)
 
 כ־10–15 שניות מקומית · כ־30–60 שניות בענן Free.

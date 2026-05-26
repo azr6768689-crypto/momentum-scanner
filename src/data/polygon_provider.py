@@ -197,6 +197,43 @@ class PolygonProvider(DataProvider):
         except Exception as exc:
             raise ProviderError(f"Polygon hourly fetch failed for {sym}: {exc}") from exc
 
+    def get_minute_bars(
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+        *,
+        multiplier: int = 5,
+        timespan: str = "minute",
+    ) -> pd.DataFrame:
+        """Intraday aggregates (default 5-minute bars) for live session stats."""
+        sym = self.normalize_symbol(symbol)
+        try:
+            return self._retry(self._fetch_aggregate)(sym, start, end, multiplier, timespan)
+        except SymbolNotFoundError:
+            return self.empty_frame()
+        except Exception as exc:
+            raise ProviderError(f"Polygon intraday fetch failed for {sym}: {exc}") from exc
+
+    def get_prev_day_bar(self, symbol: str) -> dict[str, float]:
+        """Previous session OHLCV via Polygon prev endpoint."""
+        sym = self.normalize_symbol(symbol)
+        url = f"{_POLYGON_BASE}/v2/aggs/ticker/{sym}/prev"
+        params = {"adjusted": "true", "apiKey": self._api_key}
+        resp = self._session.get(url, params=params, timeout=20)
+        if resp.status_code != 200:
+            return {}
+        row = (resp.json().get("results") or [{}])[0]
+        if not row:
+            return {}
+        return {
+            "open": float(row.get("o", 0)),
+            "high": float(row.get("h", 0)),
+            "low": float(row.get("l", 0)),
+            "close": float(row.get("c", 0)),
+            "volume": float(row.get("v", 0)),
+        }
+
     def list_us_stock_tickers(self, limit: int | None = None) -> list[str]:
         """List active US common-stock tickers from Polygon reference data."""
         tickers: list[str] = []
