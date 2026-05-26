@@ -56,15 +56,49 @@ def _render_polygon_setup() -> None:
     else:
         st.sidebar.error("אין מפתח Polygon — הסריקה לא תציג מחירי שוק אמיתיים")
         pasted = st.sidebar.text_input("הדבק מפתח Polygon", type="password", key="apex_polygon_paste")
-        if st.sidebar.button("שמור מפתח", use_container_width=True):
-            try:
-                save_polygon_api_key(pasted)
-                st.sidebar.success("המפתח נשמר — הרץ סריקה מחדש")
-                st.rerun()
-            except ValueError as exc:
-                st.sidebar.error(str(exc))
+        c_test, c_save = st.sidebar.columns(2)
+        with c_test:
+            if st.button("בדוק", use_container_width=True) and pasted.strip():
+                from src.polygon_preflight import validate_polygon_api_key
+                from src.polygon_key_store import polygon_key_tail
+
+                ok, msg = validate_polygon_api_key(pasted.strip())
+                if ok:
+                    st.sidebar.success(f"✅ מפתח תקין · …{polygon_key_tail(pasted)}")
+                else:
+                    st.sidebar.error(msg[:400])
+        with c_save:
+            if st.button("שמור", use_container_width=True) and pasted.strip():
+                try:
+                    save_polygon_api_key(pasted)
+                    st.sidebar.success("נשמר — הרץ סריקה")
+                    st.rerun()
+                except ValueError as exc:
+                    st.sidebar.error(str(exc))
+        with st.sidebar.expander("איזה מפתח לבחור ב-Polygon? (יש לך 6)"):
+            st.markdown(
+                """
+                **השתמש רק ב:**
+                - **API Key** / **Default** (מחרוזת ארוכה ~30+ תווים)
+                - מנוי **Stocks** פעיל
+
+                **לא להשתמש ב:**
+                - Publishable / Client
+                - Webhook secret
+                - Access Key לקבצי S3
+
+                **לא זוכר איזה?**  
+                1. צור **API Key חדש** ב-Polygon  
+                2. הדבק כאן → **בדוק** → אם ירוק → **שמור**  
+                3. מחק מפתחות ישנים ב-Polygon
+
+                או מהמחשב:
+                `python scripts/check_polygon_key.py --file keys.txt`
+                (שורה אחת לכל מפתח)
+                """
+            )
         st.sidebar.caption(
-            "או ב-Render: Environment → `POLYGON_API_KEY` + `DATA_PROVIDER=polygon` → Deploy"
+            "Render: `POLYGON_API_KEY` + `DATA_PROVIDER=polygon` → Deploy"
         )
 
 
