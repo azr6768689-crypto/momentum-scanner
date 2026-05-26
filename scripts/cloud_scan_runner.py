@@ -90,18 +90,34 @@ def main() -> int:
         profile_label=profile.label_he,
     )
 
-    cmd = [
-        sys.executable,
-        str(ROOT / "scripts" / "run_pro_scanner.py"),
-        "--universe-csv",
-        str(ROOT / "data/universe/polygon_liquid_us.csv"),
-        "--sector-map",
-        str(ROOT / "data/universe/sector_map.csv"),
-        "--profile",
-        profile_id,
-        "--workers",
-        str(workers),
-    ]
+    apex_mode = os.getenv("SCAN_ENGINE", "apex").strip().lower() != "legacy"
+    if apex_mode:
+        cmd = [
+            sys.executable,
+            str(ROOT / "scripts" / "run_apex_scanner.py"),
+            "--universe-csv",
+            str(ROOT / "data/universe/polygon_liquid_us.csv"),
+            "--sector-map",
+            str(ROOT / "data/universe/sector_map.csv"),
+            "--output-suffix",
+            "apex",
+            "--no-charts",
+            "--workers",
+            str(workers),
+        ]
+    else:
+        cmd = [
+            sys.executable,
+            str(ROOT / "scripts" / "run_pro_scanner.py"),
+            "--universe-csv",
+            str(ROOT / "data/universe/polygon_liquid_us.csv"),
+            "--sector-map",
+            str(ROOT / "data/universe/sector_map.csv"),
+            "--profile",
+            profile_id,
+            "--workers",
+            str(workers),
+        ]
     cap = cloud_symbol_cap()
     if cap:
         cmd.extend(["--limit", str(cap)])

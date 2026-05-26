@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""Apex Momentum Scanner — institutional-grade universe scan."""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+import sys
+from datetime import date, timedelta
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from src.apex.data_loader import load_csv_universe, load_sector_map, load_universe_bars
+from src.apex.report import write_apex_report
+from src.apex.scanner import ApexScanner
+from src.config import ensure_directories, load_settings
+from src.data import get_provider
+from src.scan_progress import clear_progress, write_progress
+from src.scan_runtime import apply_render_fast_env, build_scan_subprocess_env, cap_scan_workers
+
+
+def _setup_logging(level: str) -> None:
+    logging.basicConfig(
+        level=getattr(logging, level, logging.INFO),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+        stream=sys.stderr,
+    )
+
+
+def _default_workers() -> int:
+    raw = os.getenv("SCAN_WORKERS", "").strip()
+    if raw.isdigit() and int(raw) > 0:
+        return cap_scan_workers(int(raw))
+    return cap_scan_workers(8)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Apex institutional momentum scanner")
+    parser.add_argument("--universe-csv", type=Path, default=ROOT / "data/universe/polygon_liquid_us.csv")
+    parser.add_argument("--sector-map", type=Path, default=ROOT / "data/universe/sector_map.csv")
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--workers", type=int, default=None)
+    parser.add_argument("--trim-bars", type=int, default=None)
+    parser.add_argument("--output-suffix", type=str, default="apex")
+    parser.add_argument("--min-score", type=int, default=0, help="Filter rows below this Apex Score in CSV")
+    parser.add_argument("--no-charts", action="store_true")
+    args = parser.parse_args()
+
+    apply_render_fast_env()
+    write_progress(1, "מתחיל", message="Apex Scanner — מאתחל…")
+
+    settings = load_settings()
+    ensure_directories(settings)
+    _setup_logging(settings.log_level)
+    log = logging.getLogger("run_apex_scanner")
+
+    try:
+        provider = get_provider(settings)
+    except RuntimeError as exc:
+        log.error("%s", exc)
+        clear_progress()
+        print("scanner_status=error")
+        print(f"error_message={exc}")
+        return 1
+
+    tickers = load_csv_universe(args.universe_csv)
+    sector_map = load_sector_map(args.sector_map)
+    if args.limit:
+        tickers = tickers[: args.limit]
+
+    trim = args.trim_bars
+    if trim is None:
+        env_trim = os.getenv("SCAN_TRIM_BARS", "").strip()
+        trim = int(env_trim) if env_trim.isdigit() else 126
+
+    end = date.today()
+    start = end - timedelta(days=max(int(trim * 1.8) + 60, 280))
+    workers = args.workers or _default_workers()
+    n = len(tickers)
+
+    log.info("Apex scan: provider=%s symbols=%d workers=%d trim=%d", settings.provider, n, workers, trim)
+    write_progress(3, "מתחיל", total=n, message=f"Apex: סורק {n:,} מניות")
+
+    universe = load_universe_bars(
+        tickers,
+        provider,
+        start,
+        end,
+        workers=workers,
+        trim_bars=trim,
+        universe_size=n,
+        profile_label="Apex",
+    )
+
+    write_progress(72, "דירוג", total=n, message=f"Apex: מנתח {n:,} מניות")
+    scanner = ApexScanner(
+        universe,
+        sector_map,
+        include_charts=not args.no_charts and os.getenv("SCAN_SKIP_CHART_JSON", "").lower() not in {"1", "true"},
+    )
+    results = scanner.scan(tickers, workers=workers)
+
+    if args.min_score > 0:
+        results = [r for r in results if r.apex_score >= args.min_score]
+
+    filename = settings.reporting.csv_filename_format.format(date=end.isoformat())
+    filename = filename.replace("_report.csv", f"_{args.output_suffix}_report.csv")
+    out = settings.reporting.output_dir / filename
+    write_apex_report(results, out)
+
+    top = sum(1 for r in results if r.apex_score >= 80)
+    write_progress(100, "הושלם", done=n, total=n, message="Apex: הסריקה הסתיימה")
+
+    print("scanner_status=ok")
+    print("scan_engine=apex")
+    print(f"provider={settings.provider}")
+    print(f"symbols_requested={n}")
+    print(f"symbols_scored={len(results)}")
+    print(f"report_file={out.name}")
+    print(f"top_apex_80_plus={top}")
+    if results:
+        print(f"best_symbol={results[0].ticker}")
+        print(f"best_score={results[0].apex_score}")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        import traceback
+
+        traceback.print_exc()
+        print("scanner_status=error")
+        print(f"error={exc}")
+        raise SystemExit(1) from exc

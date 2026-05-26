@@ -35,14 +35,26 @@ def _run_initial_scan() -> None:
     from src.scan_profiles import get_profile
 
     profile = get_profile(profile_id)
-    cmd = [
-        sys.executable,
-        "scripts/run_pro_scanner.py",
-        "--profile",
-        profile.id,
-        "--sector-map",
-        str(sector_map),
-    ]
+    use_apex = os.getenv("SCAN_ENGINE", "apex").strip().lower() != "legacy"
+    if use_apex:
+        cmd = [
+            sys.executable,
+            "scripts/run_apex_scanner.py",
+            "--sector-map",
+            str(sector_map),
+            "--output-suffix",
+            "apex",
+            "--no-charts",
+        ]
+    else:
+        cmd = [
+            sys.executable,
+            "scripts/run_pro_scanner.py",
+            "--profile",
+            profile.id,
+            "--sector-map",
+            str(sector_map),
+        ]
     output_suffix = os.getenv("SCANNER_OUTPUT_SUFFIX", "").strip()
     if output_suffix:
         cmd.extend(["--output-suffix", output_suffix])
@@ -62,7 +74,7 @@ def _start_streamlit() -> None:
         "-m",
         "streamlit",
         "run",
-        "dashboard/app.py",
+        "dashboard/apex_app.py",
         "--server.port",
         port,
         "--server.address",

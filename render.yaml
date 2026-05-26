@@ -16,6 +16,8 @@ services:
         value: "true"
       - key: DATA_PROVIDER
         value: demo
+      - key: SCAN_ENGINE
+        value: apex
       - key: SCAN_PROFILE
         value: simple
       - key: SCANNER_UNIVERSE_CSV

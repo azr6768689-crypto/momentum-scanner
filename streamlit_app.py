@@ -3,7 +3,7 @@ from pathlib import Path
 import importlib.util
 import os
 
-_path = Path(__file__).resolve().parent / "dashboard" / "app.py"
+_path = Path(__file__).resolve().parent / "dashboard" / "apex_app.py"
 _spec = importlib.util.spec_from_file_location("momentum_dashboard", _path)
 _mod = importlib.util.module_from_spec(_spec)
 assert _spec.loader is not None
