@@ -199,13 +199,14 @@ class TiingoProvider(DataProvider):
     ) -> pd.DataFrame:
         sym = self.normalize_symbol(symbol)
 
-        # 1. Try cache
+        # 1. Try cache (verify it covers the full requested range)
         cached = self._cache.read(sym)
         if cached is not None and not cached.empty:
-            # Filter to requested range
             mask = (cached.index >= pd.Timestamp(start)) & (cached.index <= pd.Timestamp(end))
             sliced = cached.loc[mask]
-            if not sliced.empty:
+            covers_start = cached.index.min() <= pd.Timestamp(start) + pd.Timedelta(days=5)
+            covers_end = cached.index.max() >= pd.Timestamp(end) - pd.Timedelta(days=5)
+            if not sliced.empty and covers_start and covers_end:
                 log.debug("Cache hit for %s (%d rows)", sym, len(sliced))
                 return sliced
 

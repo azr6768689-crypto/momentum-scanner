@@ -75,6 +75,7 @@ def get_provider(settings: "Settings") -> DataProvider:
         from .polygon_provider import PolygonProvider
 
         key = settings.get_polygon_key()
+        rl = settings.data.rate_limits.get("polygon")
         log.info("Using PolygonProvider.")
         return PolygonProvider(
             api_key=key,
@@ -84,6 +85,7 @@ def get_provider(settings: "Settings") -> DataProvider:
             retry_max_attempts=settings.data.retry_max_attempts,
             retry_initial_backoff=settings.data.retry_initial_backoff,
             retry_max_backoff=settings.data.retry_max_backoff,
+            requests_per_minute=(rl.requests_per_minute if rl else 0),
         )
 
     if p == "alpaca":

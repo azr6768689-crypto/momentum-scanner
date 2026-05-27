@@ -122,18 +122,28 @@ def _attach_hourly_charts(report: pd.DataFrame, provider, top_n: int, end: date,
 
     start = end - timedelta(days=30)
     symbols = report["סימבול"].astype(str).str.upper().head(top_n).tolist()
-    for idx, symbol in enumerate(symbols, start=1):
+
+    def _fetch_hourly(symbol: str) -> tuple[str, str]:
         try:
             hourly = provider.get_hourly_bars(symbol, start, end)
+            if hourly.empty:
+                return symbol, "[]"
+            return symbol, json.dumps(hourly["close"].tail(120).round(2).tolist())
         except Exception as exc:
             log.warning("Failed hourly chart for %s: %s", symbol, exc)
-            continue
-        if hourly.empty:
-            continue
-        values = hourly["close"].tail(120).round(2).tolist()
-        report.loc[report["סימבול"].astype(str).str.upper() == symbol, "גרף שעתי"] = json.dumps(values)
-        if idx % 10 == 0 or idx == len(symbols):
-            log.info("Fetched hourly charts %d/%d", idx, len(symbols))
+            return symbol, "[]"
+
+    workers = min(4, max(1, len(symbols)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_fetch_hourly, sym): sym for sym in symbols}
+        done = 0
+        for future in as_completed(futures):
+            symbol, chart_json = future.result(timeout=60)
+            if chart_json != "[]":
+                report.loc[report["סימבול"].astype(str).str.upper() == symbol, "גרף שעתי"] = chart_json
+            done += 1
+            if done % 10 == 0 or done == len(symbols):
+                log.info("Fetched hourly charts %d/%d", done, len(symbols))
     return report
 
 
@@ -183,18 +193,19 @@ def _attach_news(report: pd.DataFrame, provider, top_n: int, log: logging.Logger
         report[column] = report[column].fillna("").astype("object")
 
     symbols = report["סימבול"].astype(str).str.upper().head(top_n).tolist()
-    for idx, symbol in enumerate(symbols, start=1):
+
+    def _fetch_news_one(symbol: str) -> tuple[str, dict[str, Any] | None]:
         try:
             news_items = provider.get_ticker_news(symbol, limit=5)
         except Exception as exc:
             log.warning("Failed news fetch for %s: %s", symbol, exc)
-            continue
+            return symbol, None
         matching_items = [
             item for item in news_items
             if symbol in [str(t).upper().strip() for t in (item.get("tickers") or [])]
         ]
         if not matching_items:
-            continue
+            return symbol, None
         latest = matching_items[0]
         title = str(latest.get("title") or "").strip()
         description = str(latest.get("description") or "").strip()
@@ -202,13 +213,33 @@ def _attach_news(report: pd.DataFrame, provider, top_n: int, log: logging.Logger
         if symbol not in title.upper():
             score = min(score, 55)
             catalyst = f"{catalyst} / כתבה רחבה"
-        mask = report["סימבול"].astype(str).str.upper() == symbol
-        report.loc[mask, "חדשות אחרונות"] = title[:220]
-        report.loc[mask, "ציון חדשות"] = score
-        report.loc[mask, "קטליסט"] = catalyst
-        report.loc[mask, "תאריך חדשות"] = _published_date(latest)
-        if idx % 10 == 0 or idx == len(symbols):
-            log.info("Fetched news %d/%d", idx, len(symbols))
+        return symbol, {
+            "title": title[:220],
+            "score": score,
+            "catalyst": catalyst,
+            "date": _published_date(latest),
+        }
+
+    workers = min(4, max(1, len(symbols)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_fetch_news_one, sym): sym for sym in symbols}
+        done = 0
+        for future in as_completed(futures):
+            try:
+                symbol, news_data = future.result(timeout=60)
+            except Exception as exc:
+                log.warning("News fetch error: %s", exc)
+                done += 1
+                continue
+            if news_data is not None:
+                mask = report["סימבול"].astype(str).str.upper() == symbol
+                report.loc[mask, "חדשות אחרונות"] = news_data["title"]
+                report.loc[mask, "ציון חדשות"] = news_data["score"]
+                report.loc[mask, "קטליסט"] = news_data["catalyst"]
+                report.loc[mask, "תאריך חדשות"] = news_data["date"]
+            done += 1
+            if done % 10 == 0 or done == len(symbols):
+                log.info("Fetched news %d/%d", done, len(symbols))
     return report
 
 

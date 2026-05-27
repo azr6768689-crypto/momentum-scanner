@@ -9,10 +9,13 @@ trend, breakout proximity, volume behavior, volatility compression, and risk.
 from __future__ import annotations
 
 import json
+import logging
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from dataclasses import dataclass
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 import pandas as pd
 
@@ -205,12 +208,21 @@ def build_professional_long_rows(
     profile_label = os.getenv("SCAN_PROFILE_LABEL", "").strip() or "סריקה"
     total = len(tickers)
     setups: list[LongSetup] = []
+    analyze_timeout = int(os.getenv("SCAN_ANALYZE_TIMEOUT", "60"))
     if len(tickers) >= 80 and workers > 1:
         done = 0
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {pool.submit(_analyze_one, t): t for t in tickers}
             for future in as_completed(futures):
-                setups.append(future.result())
+                ticker_key = futures[future]
+                try:
+                    setups.append(future.result(timeout=analyze_timeout))
+                except FuturesTimeoutError:
+                    _log.warning("Analyze timeout for %s after %ds", ticker_key, analyze_timeout)
+                    setups.append(_analyze_one(ticker_key) if False else _empty_setup(ticker_key, sector_map.get(ticker_key, "לא זמין"), market, sector_stats))
+                except Exception as exc:
+                    _log.warning("Analyze error for %s: %s", ticker_key, exc)
+                    setups.append(_empty_setup(ticker_key, sector_map.get(ticker_key, "לא זמין"), market, sector_stats))
                 done += 1
                 if done == 1 or done % 40 == 0 or done == total:
                     pct = 78 + int(10 * done / max(total, 1))
@@ -370,6 +382,18 @@ def _apply_strategy_backtest_aggregates(rows: list[dict[str, Any]]) -> None:
             f"Backtest אגרגטיבי לפי אסטרטגיה: {float(aggregate['success']):.0f}% הצלחה "
             f"מתוך {int(aggregate['samples'])} מופעים דומים בכל המניות בדפוס {pattern}."
         )
+
+
+def _empty_setup(
+    ticker: str,
+    sector: str = "לא זמין",
+    market: dict[str, Any] | None = None,
+    sector_stats: dict[str, dict[str, Any]] | None = None,
+) -> LongSetup:
+    """Return a minimal no-data setup for tickers that timed out or errored."""
+    market = market or _market_regime(None, None, None)
+    si = (sector_stats or {}).get(sector) or _neutral_sector(sector)
+    return _analyze_ticker(ticker, None, None, market=market, sector=sector, sector_info=si)
 
 
 def _analyze_ticker(
