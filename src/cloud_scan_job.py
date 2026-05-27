@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 STATUS_PATH = ROOT / "data" / "reports" / ".scan_job.json"
 PID_PATH = ROOT / "data" / "reports" / ".scan_job.pid"
 LOG_PATH = ROOT / "data" / "reports" / ".scan_job.log"
+LAST_ATTEMPT_PATH = ROOT / "data" / "reports" / ".scan_last_attempt"
 RUNNER = ROOT / "scripts" / "cloud_scan_runner.py"
 
 from src.report_persistence import load_last_report, save_last_report
@@ -251,6 +252,10 @@ def start_full_scan(profile_id: str = "simple") -> tuple[bool, str]:
 
     profile = get_profile(profile_id)
     PID_PATH.write_text(str(proc.pid), encoding="utf-8")
+    try:
+        LAST_ATTEMPT_PATH.write_text(str(time.time()), encoding="utf-8")
+    except OSError:
+        pass
     write_progress(
         1,
         "מתחיל",
@@ -310,8 +315,31 @@ def _last_report_finished_at() -> float | None:
     return max(candidates)
 
 
+def _read_last_attempt_at() -> float | None:
+    """Timestamp persisted by start_full_scan on every attempt (success or fail)."""
+    if not LAST_ATTEMPT_PATH.is_file():
+        return None
+    try:
+        return float(LAST_ATTEMPT_PATH.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        try:
+            return LAST_ATTEMPT_PATH.stat().st_mtime
+        except OSError:
+            return None
+
+
 def last_scan_started_at() -> float | None:
-    """Timestamp of the last scan start (running or finished)."""
+    """Timestamp of the last scan attempt (running, finished, or failed).
+
+    Uses (in priority order):
+      1. status['started_at'] of the currently-running scan,
+      2. the persisted .scan_last_attempt timestamp from any prior start,
+      3. the mtime of the most recent successful report.
+
+    This prevents tight retry loops after failed scans: even a failed attempt
+    advances the auto-recurring clock so we wait the configured interval
+    before trying again.
+    """
     status = _read_status()
     started = status.get("started_at")
     if started:
@@ -319,6 +347,9 @@ def last_scan_started_at() -> float | None:
             return float(started)
         except (TypeError, ValueError):
             pass
+    persisted = _read_last_attempt_at()
+    if persisted is not None:
+        return persisted
     return _last_report_finished_at()
 
 
