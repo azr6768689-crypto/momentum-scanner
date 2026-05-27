@@ -278,3 +278,80 @@ def get_status() -> dict:
     if status.get("state") == "running":
         status["progress"] = get_scan_progress()
     return status
+
+
+# ---------------------------------------------------------------------------
+# Auto-recurring scan helpers
+# ---------------------------------------------------------------------------
+
+
+def _auto_interval_hours_env() -> float:
+    raw = os.getenv("SCAN_AUTO_INTERVAL_HOURS", "3").strip()
+    try:
+        val = float(raw)
+    except ValueError:
+        return 3.0
+    return max(0.0, val)
+
+
+def _last_report_finished_at() -> float | None:
+    """Most recent successful report mtime (used as 'last scan' anchor)."""
+    reports_dir = STATUS_PATH.parent
+    if not reports_dir.exists():
+        return None
+    candidates = []
+    for path in reports_dir.glob("*_report.csv"):
+        try:
+            candidates.append(path.stat().st_mtime)
+        except OSError:
+            continue
+    if not candidates:
+        return None
+    return max(candidates)
+
+
+def last_scan_started_at() -> float | None:
+    """Timestamp of the last scan start (running or finished)."""
+    status = _read_status()
+    started = status.get("started_at")
+    if started:
+        try:
+            return float(started)
+        except (TypeError, ValueError):
+            pass
+    return _last_report_finished_at()
+
+
+def seconds_until_next_auto_scan(interval_hours: float | None = None) -> float:
+    """How many seconds until the next auto-scan should fire (0 = now)."""
+    if interval_hours is None:
+        interval_hours = _auto_interval_hours_env()
+    if interval_hours <= 0:
+        return float("inf")
+    anchor = last_scan_started_at()
+    if anchor is None:
+        return 0.0
+    elapsed = time.time() - anchor
+    remaining = interval_hours * 3600.0 - elapsed
+    return max(0.0, remaining)
+
+
+def should_auto_run_scan(interval_hours: float | None = None) -> bool:
+    """Return True if auto-recurring scan should be triggered now."""
+    if interval_hours is None:
+        interval_hours = _auto_interval_hours_env()
+    if interval_hours <= 0:
+        return False
+    if is_scan_running():
+        return False
+    return seconds_until_next_auto_scan(interval_hours) <= 0
+
+
+def maybe_auto_run_scan(
+    profile_id: str = "simple",
+    interval_hours: float | None = None,
+) -> tuple[bool, str]:
+    """If interval elapsed and nothing running, kick off a fresh scan."""
+    if not should_auto_run_scan(interval_hours):
+        return False, ""
+    return start_full_scan(profile_id)

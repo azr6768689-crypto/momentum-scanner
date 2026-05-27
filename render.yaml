@@ -49,9 +49,16 @@ services:
         value: "0"
       - key: ENABLE_DASHBOARD_SCAN_BUTTON
         value: "true"
+      # Blocking startup scan disabled — would delay Streamlit boot past Render health check.
       - key: RUN_SCAN_ON_STARTUP
         value: "false"
+      # The Apex dashboard auto-triggers a scan on first open when no report exists
+      # via SCAN_AUTO_INTERVAL_HOURS below (apex_app's auto-recurring logic).
       - key: AUTO_SCAN_ON_ENTRY
         value: "false"
+      # Auto-rescan every N hours while the dashboard is open (0 = disabled, manual only).
+      # Default 3h: on first open it scans immediately, then every 3h until the tab is closed.
+      - key: SCAN_AUTO_INTERVAL_HOURS
+        value: "3"
       - key: DASHBOARD_PASSWORD
         sync: false

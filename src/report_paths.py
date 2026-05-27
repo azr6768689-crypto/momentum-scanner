@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-OFFICIAL_REPORT_SUFFIXES = frozenset({"us_simple", "us_medium", "us_full"})
+OFFICIAL_REPORT_SUFFIXES = frozenset({"us_simple", "us_medium", "us_full", "apex"})
 
 
 def is_official_report_csv(path: Path) -> bool:

@@ -287,25 +287,254 @@ def _run_scan_subprocess() -> tuple[bool, str]:
     return proc.returncode == 0, out[-4000:]
 
 
+def _auto_scan_interval_hours() -> float:
+    raw = os.getenv("SCAN_AUTO_INTERVAL_HOURS", "3").strip()
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 3.0
+
+
+def _format_remaining(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}ש׳ {m:02d}ד׳"
+    if m:
+        return f"{m}ד׳ {s:02d}ש׳"
+    return f"{s}ש׳"
+
+
+def _compute_scan_rate(status: dict, prog: dict) -> dict:
+    """Derive elapsed / rate / ETA from the scan status and progress."""
+    import time
+
+    started_at_raw = status.get("started_at")
+    try:
+        started_at = float(started_at_raw) if started_at_raw else 0.0
+    except (TypeError, ValueError):
+        started_at = 0.0
+    elapsed = max(0.0, time.time() - started_at) if started_at > 0 else 0.0
+
+    try:
+        done = int(prog.get("done") or 0)
+    except (TypeError, ValueError):
+        done = 0
+    try:
+        total = int(prog.get("total") or 0)
+    except (TypeError, ValueError):
+        total = 0
+    try:
+        percent = float(prog.get("percent") or 0)
+    except (TypeError, ValueError):
+        percent = 0.0
+
+    rate_symbols = (done / elapsed) if elapsed > 0 and done > 0 else 0.0
+    rate_percent = (percent / elapsed) if elapsed > 0 and percent > 0 else 0.0
+
+    if rate_symbols > 0 and total > done > 0:
+        eta = (total - done) / rate_symbols
+    elif rate_percent > 0 and 0 < percent < 100:
+        eta = (100.0 - percent) / rate_percent
+    else:
+        eta = 0.0
+
+    return {
+        "elapsed": elapsed,
+        "rate_symbols_per_sec": rate_symbols,
+        "rate_percent_per_sec": rate_percent,
+        "eta_seconds": eta,
+        "done": done,
+        "total": total,
+        "percent": percent,
+    }
+
+
+def _render_scan_progress_panel() -> None:
+    """Prominent in-page panel showing % / speed / ETA while a scan runs."""
+    try:
+        from src.cloud_scan_job import cancel_scan, get_scan_progress, get_status
+    except ImportError:
+        return
+
+    status = get_status()
+    if status.get("state") != "running":
+        return
+
+    prog = get_scan_progress()
+    stats = _compute_scan_rate(status, prog)
+    percent = max(0.0, min(100.0, stats["percent"]))
+    elapsed_str = _format_remaining(stats["elapsed"]) if stats["elapsed"] else "—"
+    eta_str = _format_remaining(stats["eta_seconds"]) if stats["eta_seconds"] > 0 else "—"
+
+    rate_sym = stats["rate_symbols_per_sec"]
+    rate_pct_per_min = stats["rate_percent_per_sec"] * 60.0
+    if rate_sym >= 1:
+        rate_str = f"{rate_sym:,.1f} מניות/שנייה"
+    elif rate_sym > 0:
+        rate_str = f"{rate_sym * 60:,.1f} מניות/דקה"
+    elif rate_pct_per_min > 0:
+        rate_str = f"{rate_pct_per_min:,.1f}%/דקה"
+    else:
+        rate_str = "מאתחל…"
+
+    done = stats["done"]
+    total = stats["total"]
+    counter = f"{done:,} / {total:,}" if total else f"{done:,}" if done else "—"
+
+    phase = prog.get("phase") or "סריקה"
+    profile_label = prog.get("profile_label") or status.get("profile_label") or ""
+    title = f"⚡ סריקה רצה · {phase}"
+    if profile_label:
+        title += f" · {profile_label}"
+
+    st.markdown(
+        f"""
+        <div style="
+            background: linear-gradient(90deg, rgba(59,130,246,0.12), rgba(234,179,8,0.10));
+            border: 1px solid rgba(59,130,246,0.45);
+            border-radius: 12px;
+            padding: 0.9rem 1.1rem;
+            margin: 0.5rem 0 1rem 0;
+        ">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;">
+                <strong style="color:#fbbf24;font-size:1.05rem;">{title}</strong>
+                <span style="color:#e2e8f0;font-size:1.6rem;font-weight:700;">{percent:.0f}%</span>
+            </div>
+            <div style="color:#cbd5e1;margin-top:0.4rem;font-size:0.92rem;">
+                {prog.get('message', '')}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.progress(int(percent) / 100.0)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("התקדמות", counter)
+    c2.metric("מהירות", rate_str)
+    c3.metric("זמן שעבר", elapsed_str)
+    c4.metric("נותר (ETA)", eta_str)
+
+    cancel_col, refresh_col, _spacer = st.columns([1, 1, 4])
+    with cancel_col:
+        if st.button("⏹ בטל סריקה", key="apex_scan_cancel_main", use_container_width=True):
+            cancel_scan()
+            st.rerun()
+    with refresh_col:
+        if st.button("🔄 רענן", key="apex_scan_refresh_main", use_container_width=True):
+            st.rerun()
+
+
+def _inject_auto_refresh(interval_seconds: int) -> None:
+    """Force the Streamlit page to reload itself periodically (HF/Render-safe)."""
+    if interval_seconds <= 0:
+        return
+    import streamlit.components.v1 as components
+
+    components.html(
+        f"""
+        <script>
+            (function() {{
+                if (window.__apexAutoReload) return;
+                window.__apexAutoReload = true;
+                setTimeout(function() {{
+                    try {{ window.parent.location.reload(); }}
+                    catch (e) {{ window.location.reload(); }}
+                }}, {int(interval_seconds * 1000)});
+            }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
 def _cloud_scan_ui() -> None:
     try:
-        from src.cloud_scan_job import cancel_scan, get_status, start_full_scan
+        from src.cloud_scan_job import (
+            cancel_scan,
+            get_scan_progress,
+            get_status,
+            maybe_auto_run_scan,
+            seconds_until_next_auto_scan,
+            start_full_scan,
+        )
     except ImportError:
         return
 
     st.sidebar.markdown("### ▶ סריקה")
-    state = get_status().get("state", "idle")
-    if state == "running":
-        from src.cloud_scan_job import get_scan_progress
 
+    default_interval = _auto_scan_interval_hours()
+    options = [0.0, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0]
+    if default_interval not in options:
+        options.append(default_interval)
+        options.sort()
+    default_idx = options.index(default_interval) if default_interval in options else options.index(3.0)
+    interval_choice = st.sidebar.selectbox(
+        "סריקה אוטומטית כל…",
+        options,
+        index=default_idx,
+        format_func=lambda v: "כבוי (ידני בלבד)" if v == 0 else f"{int(v) if v.is_integer() else v} שעות",
+        key="apex_auto_interval_hours",
+        help="סורק מחדש אוטומטית כל X שעות כל עוד הדפדפן פתוח.",
+    )
+    interval_hours = float(interval_choice)
+
+    status = get_status()
+    state = status.get("state", "idle")
+
+    if state != "running" and interval_hours > 0:
+        triggered, _msg = maybe_auto_run_scan("simple", interval_hours=interval_hours)
+        if triggered:
+            status = get_status()
+            state = status.get("state", "idle")
+
+    if state == "running":
         prog = get_scan_progress()
-        st.sidebar.progress(min(100, int(prog.get("percent", 0))) / 100.0)
+        stats = _compute_scan_rate(status, prog)
+        percent = max(0.0, min(100.0, stats["percent"]))
+        st.sidebar.progress(int(percent) / 100.0)
         st.sidebar.caption(prog.get("message", "רץ…"))
-        if st.sidebar.button("⏹ בטל"):
-            cancel_scan()
-            st.rerun()
+
+        done = stats["done"]
+        total = stats["total"]
+        counter = f"{done:,}/{total:,}" if total else (f"{done:,}" if done else "—")
+        rate_sym = stats["rate_symbols_per_sec"]
+        if rate_sym >= 1:
+            rate_str = f"{rate_sym:,.1f}/ש"
+        elif rate_sym > 0:
+            rate_str = f"{rate_sym * 60:,.0f}/דק"
+        else:
+            rate_pct_per_min = stats["rate_percent_per_sec"] * 60.0
+            rate_str = f"{rate_pct_per_min:.1f}%/דק" if rate_pct_per_min > 0 else "—"
+        elapsed_str = _format_remaining(stats["elapsed"]) if stats["elapsed"] else "—"
+        eta_str = _format_remaining(stats["eta_seconds"]) if stats["eta_seconds"] > 0 else "—"
+
+        sm1, sm2 = st.sidebar.columns(2)
+        sm1.metric("התקדמות", counter)
+        sm2.metric("מהירות", rate_str)
+        sm3, sm4 = st.sidebar.columns(2)
+        sm3.metric("עבר", elapsed_str)
+        sm4.metric("נותר", eta_str)
+
+        cancel_col, refresh_col = st.sidebar.columns(2)
+        with cancel_col:
+            if st.button("⏹ בטל", use_container_width=True, key="apex_scan_cancel"):
+                cancel_scan()
+                st.rerun()
+        with refresh_col:
+            if st.button("🔄 רענן", use_container_width=True, key="apex_scan_refresh"):
+                st.rerun()
+        _inject_auto_refresh(10)
     else:
-        if st.sidebar.button("▶ הרץ Apex Scan", type="primary", use_container_width=True):
+        if st.sidebar.button(
+            "▶ הרץ Apex Scan עכשיו",
+            type="primary",
+            use_container_width=True,
+            key="apex_scan_manual",
+        ):
             os.environ["SCAN_ENGINE"] = "apex"
             started, msg = start_full_scan("simple")
             if started:
@@ -313,6 +542,19 @@ def _cloud_scan_ui() -> None:
             else:
                 st.sidebar.warning(msg)
             st.rerun()
+
+        if interval_hours > 0:
+            remaining = seconds_until_next_auto_scan(interval_hours)
+            if remaining == float("inf"):
+                st.sidebar.caption("סריקה אוטומטית כבויה")
+            elif remaining <= 0:
+                st.sidebar.caption("סריקה אוטומטית: מתחילה כעת…")
+            else:
+                st.sidebar.caption(f"⏱ סריקה אוטומטית הבאה בעוד {_format_remaining(remaining)}")
+            poll = max(30, min(300, int(remaining))) if remaining > 0 else 5
+            _inject_auto_refresh(poll)
+        else:
+            st.sidebar.caption("סריקה אוטומטית כבויה — לחץ על הכפתור להרצה ידנית")
 
 
 def main() -> None:
@@ -338,6 +580,7 @@ def main() -> None:
         st.success("**נתוני שוק אמיתיים** — Polygon (מחירים מותאמים, ~2,114 מניות נזילות US)")
 
     _cloud_scan_ui()
+    _render_scan_progress_panel()
 
     reports = _discover_reports()
     if not reports:
