@@ -314,16 +314,16 @@ def _scan_percent(prog: dict) -> int:
 
 
 def _render_scan_progress_panel() -> None:
-    """Minimal in-page progress panel: percent + progress bar only.
+    """In-page panel: percent + progress bar while running, error reason if failed.
 
-    Wrapped in a Streamlit fragment so it refreshes every 5 seconds
-    without reloading the whole page (no flash, no lost scroll/filter state).
+    Wrapped in a Streamlit fragment so it refreshes every 5 seconds without
+    reloading the whole page.
     """
 
     @_fragment_decorator(5)
     def _panel() -> None:
         try:
-            from src.cloud_scan_job import cancel_scan, get_scan_progress, get_status
+            from src.cloud_scan_job import cancel_scan, get_scan_progress, get_status, start_full_scan
         except ImportError:
             return
 
@@ -331,37 +331,70 @@ def _render_scan_progress_panel() -> None:
         current_state = status.get("state", "idle")
         last_state = st.session_state.get("apex_last_scan_state")
         st.session_state["apex_last_scan_state"] = current_state
-        if current_state != "running":
-            if last_state == "running":
-                _safe_rerun_app()
+
+        if current_state == "running":
+            prog = get_scan_progress()
+            percent = _scan_percent(prog)
+            st.markdown(
+                f"""
+                <div style="
+                    background: linear-gradient(90deg, rgba(59,130,246,0.12), rgba(234,179,8,0.10));
+                    border: 1px solid rgba(59,130,246,0.45);
+                    border-radius: 12px;
+                    padding: 0.7rem 1.1rem;
+                    margin: 0.5rem 0 0.6rem 0;
+                    display:flex;justify-content:space-between;align-items:center;gap:1rem;
+                ">
+                    <strong style="color:#fbbf24;font-size:1.05rem;">⚡ סריקה רצה</strong>
+                    <span style="color:#e2e8f0;font-size:1.8rem;font-weight:700;">{percent}%</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.progress(percent / 100.0)
+            cancel_col, _spacer = st.columns([1, 5])
+            with cancel_col:
+                if st.button("⏹ בטל", key="apex_scan_cancel_main", use_container_width=True):
+                    cancel_scan()
+                    _safe_rerun_app()
             return
 
-        prog = get_scan_progress()
-        percent = _scan_percent(prog)
+        if current_state in ("error", "cancelled"):
+            err = (status.get("message") or "").strip() or "הסריקה נכשלה."
+            log_tail = (status.get("log") or "").strip()
+            title = "❌ הסריקה נכשלה" if current_state == "error" else "⏹ הסריקה בוטלה"
+            color = "#ef4444" if current_state == "error" else "#f59e0b"
+            st.markdown(
+                f"""
+                <div style="
+                    background: rgba(239,68,68,0.10);
+                    border: 1px solid {color};
+                    border-radius: 12px;
+                    padding: 0.9rem 1.1rem;
+                    margin: 0.5rem 0 0.6rem 0;
+                ">
+                    <strong style="color:{color};font-size:1.05rem;">{title}</strong>
+                    <div style="color:#e2e8f0;margin-top:0.4rem;font-size:0.95rem;white-space:pre-wrap;">{err}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            retry_col, _spacer = st.columns([1, 5])
+            with retry_col:
+                if st.button("🔁 נסה שוב", key="apex_scan_retry_main", use_container_width=True, type="primary"):
+                    os.environ["SCAN_ENGINE"] = "apex"
+                    started, _ = start_full_scan("simple")
+                    if started:
+                        _safe_rerun_app()
+            if log_tail:
+                with st.expander("פרטים טכניים (לוג)", expanded=False):
+                    st.code(log_tail[-3000:])
+            return
 
-        st.markdown(
-            f"""
-            <div style="
-                background: linear-gradient(90deg, rgba(59,130,246,0.12), rgba(234,179,8,0.10));
-                border: 1px solid rgba(59,130,246,0.45);
-                border-radius: 12px;
-                padding: 0.7rem 1.1rem;
-                margin: 0.5rem 0 0.6rem 0;
-                display:flex;justify-content:space-between;align-items:center;gap:1rem;
-            ">
-                <strong style="color:#fbbf24;font-size:1.05rem;">⚡ סריקה רצה</strong>
-                <span style="color:#e2e8f0;font-size:1.8rem;font-weight:700;">{percent}%</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.progress(percent / 100.0)
-
-        cancel_col, _spacer = st.columns([1, 5])
-        with cancel_col:
-            if st.button("⏹ בטל", key="apex_scan_cancel_main", use_container_width=True):
-                cancel_scan()
-                _safe_rerun_app()
+        # Idle / ok: nothing to render here; if we just transitioned from
+        # running -> ok, force a full rerun so the new report loads.
+        if last_state == "running":
+            _safe_rerun_app()
 
     _panel()
 
