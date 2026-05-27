@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from typing import Any
 
 import pandas as pd
@@ -115,6 +115,10 @@ class ApexScanner:
     def scan(self, tickers: list[str], *, workers: int | None = None) -> list[ApexScanResult]:
         rs_map = self._rs_map(tickers)
         workers_n = cap_scan_workers(workers or 8)
+        try:
+            heartbeat_seconds = max(5, int(os.getenv("SCAN_HEARTBEAT_SECONDS", "20") or "20"))
+        except ValueError:
+            heartbeat_seconds = 20
         total = len(tickers)
         results: list[ApexScanResult] = []
 
@@ -124,18 +128,35 @@ class ApexScanner:
                     pool.submit(self._scan_one, t, rs_map.get(t, 50)): t for t in tickers
                 }
                 done = 0
-                for fut in as_completed(futs):
-                    r = fut.result()
-                    done += 1
-                    if r is not None:
-                        results.append(r)
-                    if done == 1 or done % 50 == 0 or done == total:
+                pending = set(futs)
+                while pending:
+                    try:
+                        for fut in as_completed(pending, timeout=heartbeat_seconds):
+                            pending.remove(fut)
+                            r = fut.result()
+                            done += 1
+                            if r is not None:
+                                results.append(r)
+                            if done == 1 or done % 50 == 0 or done == total:
+                                write_progress(
+                                    72 + int(22 * done / max(total, 1)),
+                                    "דירוג",
+                                    done=done,
+                                    total=total,
+                                    message=f"Apex: מדרג {done:,}/{total:,}",
+                                )
+                    except TimeoutError:
+                        # Keep the cloud job alive and visible while worker threads are still busy.
                         write_progress(
                             72 + int(22 * done / max(total, 1)),
                             "דירוג",
                             done=done,
                             total=total,
-                            message=f"Apex: מדרג {done:,}/{total:,}",
+                            message=(
+                                f"Apex: עדיין מדרג {done:,}/{total:,} "
+                                f"(ממתין ל-{len(pending):,} משימות)"
+                            ),
+                            force=True,
                         )
         else:
             for i, t in enumerate(tickers, 1):

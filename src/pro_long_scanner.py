@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from dataclasses import dataclass
 from typing import Any
 
@@ -207,21 +207,44 @@ def build_professional_long_rows(
     setups: list[LongSetup] = []
     if len(tickers) >= 80 and workers > 1:
         done = 0
+        try:
+            heartbeat_seconds = max(5, int(os.getenv("SCAN_HEARTBEAT_SECONDS", "20") or "20"))
+        except ValueError:
+            heartbeat_seconds = 20
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {pool.submit(_analyze_one, t): t for t in tickers}
-            for future in as_completed(futures):
-                setups.append(future.result())
-                done += 1
-                if done == 1 or done % 40 == 0 or done == total:
+            pending = set(futures)
+            while pending:
+                try:
+                    for future in as_completed(pending, timeout=heartbeat_seconds):
+                        pending.remove(future)
+                        setups.append(future.result())
+                        done += 1
+                        if done == 1 or done % 40 == 0 or done == total:
+                            pct = 78 + int(10 * done / max(total, 1))
+                            write_progress(
+                                pct,
+                                "דירוג",
+                                done=done,
+                                total=total,
+                                message=f"{profile_label}: מדרג {done:,}/{total:,}",
+                                profile_id=profile_id,
+                                profile_label=profile_label,
+                            )
+                except TimeoutError:
                     pct = 78 + int(10 * done / max(total, 1))
                     write_progress(
                         pct,
                         "דירוג",
                         done=done,
                         total=total,
-                        message=f"{profile_label}: מדרג {done:,}/{total:,}",
+                        message=(
+                            f"{profile_label}: עדיין מדרג {done:,}/{total:,} "
+                            f"(ממתין ל-{len(pending):,} משימות)"
+                        ),
                         profile_id=profile_id,
                         profile_label=profile_label,
+                        force=True,
                     )
     else:
         for idx, t in enumerate(tickers, start=1):
