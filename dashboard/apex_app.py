@@ -287,25 +287,108 @@ def _run_scan_subprocess() -> tuple[bool, str]:
     return proc.returncode == 0, out[-4000:]
 
 
+def _auto_scan_interval_hours() -> float:
+    raw = os.getenv("SCAN_AUTO_INTERVAL_HOURS", "3").strip()
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 3.0
+
+
+def _format_remaining(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}ש׳ {m:02d}ד׳"
+    if m:
+        return f"{m}ד׳ {s:02d}ש׳"
+    return f"{s}ש׳"
+
+
+def _inject_auto_refresh(interval_seconds: int) -> None:
+    """Force the Streamlit page to reload itself periodically (HF/Render-safe)."""
+    if interval_seconds <= 0:
+        return
+    import streamlit.components.v1 as components
+
+    components.html(
+        f"""
+        <script>
+            (function() {{
+                if (window.__apexAutoReload) return;
+                window.__apexAutoReload = true;
+                setTimeout(function() {{
+                    try {{ window.parent.location.reload(); }}
+                    catch (e) {{ window.location.reload(); }}
+                }}, {int(interval_seconds * 1000)});
+            }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
 def _cloud_scan_ui() -> None:
     try:
-        from src.cloud_scan_job import cancel_scan, get_status, start_full_scan
+        from src.cloud_scan_job import (
+            cancel_scan,
+            get_scan_progress,
+            get_status,
+            maybe_auto_run_scan,
+            seconds_until_next_auto_scan,
+            start_full_scan,
+        )
     except ImportError:
         return
 
     st.sidebar.markdown("### ▶ סריקה")
-    state = get_status().get("state", "idle")
-    if state == "running":
-        from src.cloud_scan_job import get_scan_progress
 
+    default_interval = _auto_scan_interval_hours()
+    options = [0.0, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0]
+    if default_interval not in options:
+        options.append(default_interval)
+        options.sort()
+    default_idx = options.index(default_interval) if default_interval in options else options.index(3.0)
+    interval_choice = st.sidebar.selectbox(
+        "סריקה אוטומטית כל…",
+        options,
+        index=default_idx,
+        format_func=lambda v: "כבוי (ידני בלבד)" if v == 0 else f"{int(v) if v.is_integer() else v} שעות",
+        key="apex_auto_interval_hours",
+        help="סורק מחדש אוטומטית כל X שעות כל עוד הדפדפן פתוח.",
+    )
+    interval_hours = float(interval_choice)
+
+    status = get_status()
+    state = status.get("state", "idle")
+
+    if state != "running" and interval_hours > 0:
+        triggered, _msg = maybe_auto_run_scan("simple", interval_hours=interval_hours)
+        if triggered:
+            status = get_status()
+            state = status.get("state", "idle")
+
+    if state == "running":
         prog = get_scan_progress()
         st.sidebar.progress(min(100, int(prog.get("percent", 0))) / 100.0)
         st.sidebar.caption(prog.get("message", "רץ…"))
-        if st.sidebar.button("⏹ בטל"):
-            cancel_scan()
-            st.rerun()
+        cancel_col, refresh_col = st.sidebar.columns(2)
+        with cancel_col:
+            if st.button("⏹ בטל", use_container_width=True, key="apex_scan_cancel"):
+                cancel_scan()
+                st.rerun()
+        with refresh_col:
+            if st.button("🔄 רענן", use_container_width=True, key="apex_scan_refresh"):
+                st.rerun()
+        _inject_auto_refresh(15)
     else:
-        if st.sidebar.button("▶ הרץ Apex Scan", type="primary", use_container_width=True):
+        if st.sidebar.button(
+            "▶ הרץ Apex Scan עכשיו",
+            type="primary",
+            use_container_width=True,
+            key="apex_scan_manual",
+        ):
             os.environ["SCAN_ENGINE"] = "apex"
             started, msg = start_full_scan("simple")
             if started:
@@ -313,6 +396,19 @@ def _cloud_scan_ui() -> None:
             else:
                 st.sidebar.warning(msg)
             st.rerun()
+
+        if interval_hours > 0:
+            remaining = seconds_until_next_auto_scan(interval_hours)
+            if remaining == float("inf"):
+                st.sidebar.caption("סריקה אוטומטית כבויה")
+            elif remaining <= 0:
+                st.sidebar.caption("סריקה אוטומטית: מתחילה כעת…")
+            else:
+                st.sidebar.caption(f"⏱ סריקה אוטומטית הבאה בעוד {_format_remaining(remaining)}")
+            poll = max(30, min(300, int(remaining))) if remaining > 0 else 5
+            _inject_auto_refresh(poll)
+        else:
+            st.sidebar.caption("סריקה אוטומטית כבויה — לחץ על הכפתור להרצה ידנית")
 
 
 def main() -> None:
