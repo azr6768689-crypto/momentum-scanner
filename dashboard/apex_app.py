@@ -542,6 +542,25 @@ def _inject_auto_refresh(interval_seconds: int) -> None:
     )
 
 
+def _has_existing_scan_report() -> bool:
+    """True when a prior scan report is on disk (or persisted metadata)."""
+    if _discover_reports():
+        return True
+    saved = load_last_report()
+    name = str(saved.get("report_file") or "").strip()
+    if not name:
+        return False
+    path = REPORTS_DIR / name
+    return path.is_file() and path.stat().st_size > 0
+
+
+def _start_apex_scan() -> None:
+    os.environ["SCAN_ENGINE"] = "apex"
+    from src.cloud_scan_job import start_full_scan
+
+    return start_full_scan("simple")
+
+
 def _cloud_scan_ui() -> None:
     try:
         from src.cloud_scan_job import (
@@ -612,14 +631,21 @@ def _cloud_scan_ui() -> None:
         # Fragment-based refresh handles live updates of the in-page panel.
         _inject_auto_refresh(30)
     else:
+        has_report = _has_existing_scan_report()
+        run_label = "🔄 עדכון סריקה" if has_report else "▶ הרץ Apex Scan עכשיו"
+        run_help = (
+            "מריץ סריקה מחדש ומעדכן את הדוח (אותה רמת simple)."
+            if has_report
+            else "סריקה ראשונה — דוח Apex חדש."
+        )
         if st.sidebar.button(
-            "▶ הרץ Apex Scan עכשיו",
+            run_label,
             type="primary",
             use_container_width=True,
             key="apex_scan_manual",
+            help=run_help,
         ):
-            os.environ["SCAN_ENGINE"] = "apex"
-            started, msg = start_full_scan("simple")
+            started, msg = _start_apex_scan()
             if started:
                 st.sidebar.success(msg)
             else:
@@ -667,7 +693,10 @@ def main() -> None:
 
     reports = _discover_reports()
     if not reports:
-        st.info("אין דוח. לחץ **הרץ Apex Scan** בסרגל או הרץ: `python scripts/run_apex_scanner.py`")
+        st.info(
+            "אין דוח. לחץ **▶ הרץ Apex Scan עכשיו** בסרגל (סעיף סריקה) "
+            "או הרץ: `python scripts/run_apex_scanner.py`"
+        )
         if st.button("הרץ סריקה מקומית (דמו)", type="primary"):
             with st.spinner("סורק…"):
                 ok, log = _run_scan_subprocess()
