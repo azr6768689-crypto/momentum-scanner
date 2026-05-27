@@ -40,63 +40,108 @@ def _provider() -> str:
     return os.getenv("DATA_PROVIDER", "polygon").strip().lower()
 
 
+def _render_polygon_key_form(label_prefix: str = "") -> None:
+    """Paste / test / save Polygon API key. Shared by both initial setup
+    and the 'replace key' flow when an existing key was rejected (401)."""
+    from src.polygon_key_store import polygon_key_tail, save_polygon_api_key
+
+    key_id = f"apex_polygon_paste_{label_prefix or 'init'}"
+    pasted = st.sidebar.text_input("הדבק מפתח Polygon", type="password", key=key_id)
+    c_test, c_save = st.sidebar.columns(2)
+    with c_test:
+        if st.button("בדוק", use_container_width=True, key=f"{key_id}_test") and pasted.strip():
+            from src.polygon_preflight import validate_polygon_api_key
+
+            ok, msg = validate_polygon_api_key(pasted.strip())
+            if ok:
+                st.sidebar.success(f"✅ מפתח תקין · …{polygon_key_tail(pasted)}")
+            else:
+                st.sidebar.error(msg[:400])
+    with c_save:
+        if st.button("שמור והרץ", use_container_width=True, key=f"{key_id}_save", type="primary") and pasted.strip():
+            try:
+                save_polygon_api_key(pasted)
+                # New valid key saved -> immediately kick off a fresh scan so
+                # the user does not need to find another button.
+                try:
+                    from src.cloud_scan_job import start_full_scan
+                    os.environ["SCAN_ENGINE"] = "apex"
+                    start_full_scan("simple")
+                except Exception:
+                    pass
+                st.sidebar.success("נשמר ✓ סריקה חדשה מתחילה…")
+                st.rerun()
+            except ValueError as exc:
+                st.sidebar.error(str(exc))
+
+
+def _polygon_key_help() -> None:
+    with st.sidebar.expander("איזה מפתח לבחור ב-Polygon? (יש לך 6)"):
+        st.markdown(
+            """
+            **השתמש רק ב:**
+            - **API Key** / **Default** (מחרוזת ארוכה ~30+ תווים)
+            - מנוי **Stocks** פעיל
+
+            **לא להשתמש ב:**
+            - Publishable / Client
+            - Webhook secret
+            - Access Key לקבצי S3
+
+            **לא זוכר איזה?**  
+            1. צור **API Key חדש** ב-Polygon  
+            2. הדבק כאן → **בדוק** → אם ירוק → **שמור**  
+            3. מחק מפתחות ישנים ב-Polygon
+
+            או מהמחשב:
+            `python scripts/check_polygon_key.py --file keys.txt`
+            (שורה אחת לכל מפתח)
+            """
+        )
+
+
+def _last_scan_error_is_polygon_401() -> bool:
+    try:
+        from src.cloud_scan_job import get_status
+    except ImportError:
+        return False
+    status = get_status()
+    if status.get("state") != "error":
+        return False
+    msg = str(status.get("message") or "")
+    return "401" in msg or "Polygon" in msg
+
+
 def _render_polygon_setup() -> None:
     from src.polygon_key_store import (
         polygon_key_source,
         polygon_key_tail,
         resolve_polygon_api_key,
-        save_polygon_api_key,
     )
 
     st.sidebar.markdown("### 🔑 נתוני שוק (Polygon)")
     key = resolve_polygon_api_key()
     if key:
-        st.sidebar.success(f"מחובר · מקור: {polygon_key_source()} · …{polygon_key_tail(key)}")
-        st.sidebar.caption("מחירים אמיתיים מ-Polygon (מותאמים לספליטים)")
+        # Show connection status. If the last scan failed with a 401-like
+        # error, surface a prominent 'replace key' panel because the current
+        # key is likely invalid (Render env-set keys cannot be auto-fixed).
+        rejected = _last_scan_error_is_polygon_401()
+        if rejected:
+            st.sidebar.error(
+                f"⚠ מפתח Polygon נדחה (401) · מקור: {polygon_key_source()} · …{polygon_key_tail(key)}"
+            )
+            st.sidebar.caption("הדבק מפתח חדש כאן והוא יחליף את הקודם בכל הסריקות הבאות:")
+            _render_polygon_key_form("replace")
+            _polygon_key_help()
+        else:
+            st.sidebar.success(f"מחובר · מקור: {polygon_key_source()} · …{polygon_key_tail(key)}")
+            st.sidebar.caption("מחירים אמיתיים מ-Polygon (מותאמים לספליטים)")
+            with st.sidebar.expander("🔄 החלף מפתח Polygon"):
+                _render_polygon_key_form("replace_optional")
     else:
         st.sidebar.error("אין מפתח Polygon — הסריקה לא תציג מחירי שוק אמיתיים")
-        pasted = st.sidebar.text_input("הדבק מפתח Polygon", type="password", key="apex_polygon_paste")
-        c_test, c_save = st.sidebar.columns(2)
-        with c_test:
-            if st.button("בדוק", use_container_width=True) and pasted.strip():
-                from src.polygon_preflight import validate_polygon_api_key
-                from src.polygon_key_store import polygon_key_tail
-
-                ok, msg = validate_polygon_api_key(pasted.strip())
-                if ok:
-                    st.sidebar.success(f"✅ מפתח תקין · …{polygon_key_tail(pasted)}")
-                else:
-                    st.sidebar.error(msg[:400])
-        with c_save:
-            if st.button("שמור", use_container_width=True) and pasted.strip():
-                try:
-                    save_polygon_api_key(pasted)
-                    st.sidebar.success("נשמר — הרץ סריקה")
-                    st.rerun()
-                except ValueError as exc:
-                    st.sidebar.error(str(exc))
-        with st.sidebar.expander("איזה מפתח לבחור ב-Polygon? (יש לך 6)"):
-            st.markdown(
-                """
-                **השתמש רק ב:**
-                - **API Key** / **Default** (מחרוזת ארוכה ~30+ תווים)
-                - מנוי **Stocks** פעיל
-
-                **לא להשתמש ב:**
-                - Publishable / Client
-                - Webhook secret
-                - Access Key לקבצי S3
-
-                **לא זוכר איזה?**  
-                1. צור **API Key חדש** ב-Polygon  
-                2. הדבק כאן → **בדוק** → אם ירוק → **שמור**  
-                3. מחק מפתחות ישנים ב-Polygon
-
-                או מהמחשב:
-                `python scripts/check_polygon_key.py --file keys.txt`
-                (שורה אחת לכל מפתח)
-                """
-            )
+        _render_polygon_key_form("init")
+        _polygon_key_help()
         st.sidebar.caption(
             "Render: `POLYGON_API_KEY` + `DATA_PROVIDER=polygon` → Deploy"
         )
