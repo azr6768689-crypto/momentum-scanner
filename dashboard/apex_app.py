@@ -358,6 +358,54 @@ def _scan_percent(prog: dict) -> int:
         return 0
 
 
+def _compute_scan_rate(status: dict, prog: dict) -> dict:
+    import time
+
+    started_at_raw = status.get("started_at")
+    try:
+        started_at = float(started_at_raw) if started_at_raw else 0.0
+    except (TypeError, ValueError):
+        started_at = 0.0
+    elapsed = max(0.0, time.time() - started_at) if started_at > 0 else 0.0
+    try:
+        done = int(prog.get("done") or 0)
+    except (TypeError, ValueError):
+        done = 0
+    try:
+        total = int(prog.get("total") or 0)
+    except (TypeError, ValueError):
+        total = 0
+    try:
+        percent = float(prog.get("percent") or 0)
+    except (TypeError, ValueError):
+        percent = 0.0
+    rate_symbols = (done / elapsed) if elapsed > 0 and done > 0 else 0.0
+    rate_percent = (percent / elapsed) if elapsed > 0 and percent > 0 else 0.0
+    if rate_symbols > 0 and total > done > 0:
+        eta = (total - done) / rate_symbols
+    elif rate_percent > 0 and 0 < percent < 100:
+        eta = (100.0 - percent) / rate_percent
+    else:
+        eta = 0.0
+    return {
+        "elapsed": elapsed, "rate_symbols_per_sec": rate_symbols,
+        "rate_percent_per_sec": rate_percent, "eta_seconds": eta,
+        "done": done, "total": total, "percent": percent,
+    }
+
+
+def _format_rate(stats: dict) -> str:
+    rate = stats["rate_symbols_per_sec"]
+    if rate >= 1:
+        return f"{rate:.1f}/ש"
+    if rate > 0:
+        return f"{rate * 60:.0f}/דק"
+    rate_pct = stats["rate_percent_per_sec"] * 60.0
+    if rate_pct > 0:
+        return f"{rate_pct:.1f}%/דק"
+    return "—"
+
+
 def _render_scan_progress_panel() -> None:
     """In-page panel: percent + progress bar while running, error reason if failed.
 
@@ -536,14 +584,32 @@ def _cloud_scan_ui() -> None:
 
     if state == "running":
         prog = get_scan_progress()
+        stats = _compute_scan_rate(status, prog)
         percent = _scan_percent(prog)
         st.sidebar.progress(percent / 100.0)
-        if st.sidebar.button("⏹ בטל", use_container_width=True, key="apex_scan_cancel"):
-            cancel_scan()
-            st.rerun()
-        # Fragment-based refresh (no full page reload) handles live updates of
-        # the in-page progress panel. Legacy fallback only kicks in on very old
-        # Streamlit builds without st.fragment.
+        st.sidebar.caption(prog.get("message", "רץ…"))
+
+        done, total = stats["done"], stats["total"]
+        counter = f"{done:,}/{total:,}" if total else (f"{done:,}" if done else "—")
+        elapsed_str = _format_remaining(stats["elapsed"]) if stats["elapsed"] else "—"
+        eta_str = _format_remaining(stats["eta_seconds"]) if stats["eta_seconds"] > 0 else "—"
+
+        sm1, sm2 = st.sidebar.columns(2)
+        sm1.metric("התקדמות", counter)
+        sm2.metric("מהירות", _format_rate(stats))
+        sm3, sm4 = st.sidebar.columns(2)
+        sm3.metric("עבר", elapsed_str)
+        sm4.metric("נותר", eta_str)
+
+        c_cancel, c_refresh = st.sidebar.columns(2)
+        with c_cancel:
+            if st.button("⏹ בטל", use_container_width=True, key="apex_scan_cancel"):
+                cancel_scan()
+                st.rerun()
+        with c_refresh:
+            if st.button("🔄 רענן", use_container_width=True, key="apex_scan_refresh"):
+                st.rerun()
+        # Fragment-based refresh handles live updates of the in-page panel.
         _inject_auto_refresh(30)
     else:
         if st.sidebar.button(

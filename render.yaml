@@ -38,6 +38,11 @@ services:
         value: "true"
       - key: SCAN_POLYGON_BULK
         value: "true"
+      # 90 trading days = ~4.5 months. Enough for RS / momentum / 50d MA /
+      # breakout patterns. Lower than the 126 default to halve API calls for
+      # users on Polygon free tier (5 req/min). Raise to 126 if on Starter+.
+      - key: SCAN_TRIM_BARS
+        value: "90"
       - key: APEX_LIVE_REFRESH_SEC
         value: "60"
       - key: APEX_LIVE_WORKERS

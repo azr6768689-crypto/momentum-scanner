@@ -333,7 +333,42 @@ class PolygonProvider(DataProvider):
             results = payload.get("results") or []
             return [item for item in results if isinstance(item, dict)]
 
+    def _grouped_cache_path(self, day: date) -> Path:
+        cache_dir = self._cache.cache_dir.parent / "polygon_grouped"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        return cache_dir / f"{day.isoformat()}.parquet"
+
+    def _load_grouped_cache(self, day: date) -> list[dict[str, Any]] | None:
+        if not self._cache.enabled:
+            return None
+        path = self._grouped_cache_path(day)
+        if not path.is_file():
+            return None
+        # Past trading days are immutable -> cache forever. Today's data can
+        # change intraday so honour the normal TTL there.
+        if day >= date.today():
+            age = time.time() - path.stat().st_mtime
+            if age > self._cache.ttl_seconds:
+                return None
+        try:
+            df = pd.read_parquet(path)
+        except Exception as exc:
+            log.warning("Polygon grouped cache read failed for %s: %s", day, exc)
+            return None
+        return df.to_dict(orient="records")
+
+    def _save_grouped_cache(self, day: date, rows: list[dict[str, Any]]) -> None:
+        if not self._cache.enabled or not rows:
+            return
+        try:
+            pd.DataFrame(rows).to_parquet(self._grouped_cache_path(day), engine="pyarrow")
+        except Exception as exc:
+            log.warning("Polygon grouped cache write failed for %s: %s", day, exc)
+
     def _fetch_grouped_day(self, day: date) -> list[dict[str, Any]]:
+        cached = self._load_grouped_cache(day)
+        if cached is not None:
+            return cached
         url = f"{_POLYGON_BASE}/v2/aggs/grouped/locale/us/market/stocks/{day.isoformat()}"
         params = {"adjusted": "true", "apiKey": self._api_key}
         resp = self._session.get(url, params=params, timeout=60)
@@ -351,8 +386,9 @@ class PolygonProvider(DataProvider):
         if resp.status_code != 200:
             raise ProviderError(f"Polygon grouped HTTP {resp.status_code} for {day}: {resp.text[:200]}")
         payload = resp.json()
-        results = payload.get("results") or []
-        return [item for item in results if isinstance(item, dict)]
+        results = [item for item in (payload.get("results") or []) if isinstance(item, dict)]
+        self._save_grouped_cache(day, results)
+        return results
 
     def _fetch_daily(self, symbol: str, start: date, end: date) -> pd.DataFrame:
         return self._fetch_aggregate(symbol, start, end, 1, "day")
