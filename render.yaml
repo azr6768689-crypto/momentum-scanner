@@ -26,10 +26,16 @@ services:
         value: data/universe/polygon_liquid_us.csv
       - key: SCANNER_SECTOR_MAP
         value: data/universe/sector_map.csv
+      # SCAN_WORKERS (data load) is hard-capped to 3 on Render Free by
+      # scan_runtime.py's _RENDER_MAX_WORKERS. 8 here is the value used on
+      # larger plans where the cap doesn't apply.
       - key: SCAN_WORKERS
         value: "8"
+      # SCAN_ANALYZE_WORKERS controls the scoring/ranking phase memory
+      # peak. 2 keeps the analyze peak under ~150MB so we don't OOM at 92%
+      # while writing the final report on a 512MB container.
       - key: SCAN_ANALYZE_WORKERS
-        value: "8"
+        value: "2"
       - key: SCAN_RENDER_FAST
         value: "true"
       - key: SCAN_SKIP_SPARKLINES
@@ -56,9 +62,12 @@ services:
         value: "4"
       - key: SCAN_TIMEOUT_SECONDS
         value: "900"
-      # 0 = full universe (~2114). Set e.g. 600 if Free tier cannot finish under 1 min.
+      # Cap the universe size on cloud. 1500 covers S&P 500 + Russell 1000
+      # + top mid-caps (the institutional momentum universe) and fits
+      # comfortably in 512MB. 0 = no cap (full ~2,114 — only safe on
+      # Render Starter+).
       - key: SCAN_CLOUD_MAX_SYMBOLS
-        value: "0"
+        value: "1500"
       - key: ENABLE_DASHBOARD_SCAN_BUTTON
         value: "true"
       # Blocking startup scan disabled — would delay Streamlit boot past Render health check.

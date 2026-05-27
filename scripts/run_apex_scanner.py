@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import logging
 import os
 import sys
@@ -43,7 +44,13 @@ def main() -> int:
     parser.add_argument("--universe-csv", type=Path, default=ROOT / "data/universe/polygon_liquid_us.csv")
     parser.add_argument("--sector-map", type=Path, default=ROOT / "data/universe/sector_map.csv")
     parser.add_argument("--limit", type=int, default=None)
-    parser.add_argument("--workers", type=int, default=None)
+    parser.add_argument("--workers", type=int, default=None, help="Workers for data load phase")
+    parser.add_argument(
+        "--analyze-workers",
+        type=int,
+        default=None,
+        help="Workers for scoring/ranking phase (lower than --workers to cap peak RAM)",
+    )
     parser.add_argument("--trim-bars", type=int, default=None)
     parser.add_argument("--output-suffix", type=str, default="apex")
     parser.add_argument("--min-score", type=int, default=0, help="Filter rows below this Apex Score in CSV")
@@ -154,6 +161,10 @@ def main() -> int:
         universe_size=n,
         profile_label="Apex",
     )
+    # Release the per-day raw rows that load_universe_bars and the parquet
+    # writer accumulated. The big Polygon response dicts are no longer needed
+    # once `universe` holds the per-ticker DataFrames.
+    gc.collect()
 
     write_progress(72, "דירוג", total=n, message=f"Apex: מנתח {n:,} מניות")
     scanner = ApexScanner(
@@ -161,7 +172,21 @@ def main() -> int:
         sector_map,
         include_charts=not args.no_charts and os.getenv("SCAN_SKIP_CHART_JSON", "").lower() not in {"1", "true"},
     )
-    results = scanner.scan(tickers, workers=workers)
+    analyze_workers = args.analyze_workers
+    if analyze_workers is None:
+        env_aw = os.getenv("SCAN_ANALYZE_WORKERS", "").strip()
+        if env_aw.isdigit() and int(env_aw) > 0:
+            analyze_workers = min(int(env_aw), workers)
+        else:
+            analyze_workers = workers
+    log.info("Apex analyze phase workers=%d (data load workers=%d)", analyze_workers, workers)
+    results = scanner.scan(tickers, workers=analyze_workers)
+    # Free per-ticker universe DataFrames once scoring is done — they're the
+    # largest single allocation and the report writer doesn't need them.
+    universe.clear()
+    del universe
+    gc.collect()
+    write_progress(95, "כתיבת דוח", total=n, message="Apex: שומר דוח לדיסק…", force=True)
 
     if not results:
         clear_progress()
