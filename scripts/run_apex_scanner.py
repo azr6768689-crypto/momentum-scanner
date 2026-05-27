@@ -166,7 +166,19 @@ def main() -> int:
     # once `universe` holds the per-ticker DataFrames.
     gc.collect()
 
-    write_progress(72, "דירוג", total=n, message=f"Apex: מנתח {n:,} מניות")
+    non_empty = sum(1 for df in universe.values() if df is not None and not df.empty)
+    log.info("Universe loaded: %d tickers, %d with bars", len(universe), non_empty)
+    if non_empty == 0:
+        clear_progress()
+        print("scanner_status=error")
+        print(
+            "error_message=טעינת נתונים מ-Polygon חזרה ריקה. "
+            "בדוק: (1) מנוי Stocks פעיל ב-Polygon, (2) מפתח Default API Key (לא Publishable). "
+            "אם הבעיה חוזרת — נקה cache ב-Render: Settings -> Clear build cache."
+        )
+        return 1
+
+    write_progress(72, "דירוג", total=n, message=f"Apex: מנתח {non_empty:,} מניות עם נתונים")
     scanner = ApexScanner(
         universe,
         sector_map,
