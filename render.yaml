@@ -38,16 +38,16 @@ services:
         value: "true"
       - key: SCAN_POLYGON_BULK
         value: "true"
-      # 126 trading days = ~6 months. Safe on Polygon Starter+ (unlimited
-      # calls). Lower to 90 if you're on Polygon Free (5 req/min limit).
+      # 90 trading days (~4.5 months). Safer for 512MB Render Free even on
+      # Polygon Starter+ since each grouped day response holds ~8K stocks.
+      # Bump to 126 if you upgrade Render to Starter (more RAM).
       - key: SCAN_TRIM_BARS
-        value: "126"
-      # Parallel grouped-daily fetches. 8 = ~8x faster on Polygon Starter+
-      # (unlimited). Set to 1 if you're on Polygon Free tier.
+        value: "90"
+      # Parallel grouped-daily fetches. 3 fits comfortably in 512MB even
+      # under load. Bump to 8 only if you upgrade Render plan.
       - key: SCAN_POLYGON_GROUPED_WORKERS
-        value: "8"
+        value: "3"
       # Pause between requests. 0 for Polygon Starter+ (unlimited).
-      # Set to ~12 if you're on Polygon Free (5 req/min limit).
       - key: SCAN_POLYGON_PAUSE
         value: "0"
       - key: APEX_LIVE_REFRESH_SEC

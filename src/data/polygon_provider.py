@@ -139,7 +139,9 @@ class PolygonProvider(DataProvider):
 
         def _fetch(day: date) -> tuple[date, list[dict[str, Any]]]:
             try:
-                return day, self._retry(self._fetch_grouped_day)(day)
+                # Pass `wanted` so the response is filtered (and cached)
+                # to just our universe — slashes memory by ~75%.
+                return day, self._retry(self._fetch_grouped_day)(day, wanted)
             except SymbolNotFoundError:
                 return day, []
             except Exception as exc:
@@ -405,10 +407,24 @@ class PolygonProvider(DataProvider):
         except Exception as exc:
             log.warning("Polygon grouped cache write failed for %s: %s", day, exc)
 
-    def _fetch_grouped_day(self, day: date) -> list[dict[str, Any]]:
+    def _fetch_grouped_day(
+        self,
+        day: date,
+        wanted: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fetch grouped daily bars for a single day.
+
+        When ``wanted`` is given, only rows for those tickers are kept in
+        memory and cached. This is critical on small-RAM hosts (Render Free,
+        512MB) where keeping all ~8,000 US stocks per day for 126 days at 8x
+        parallelism otherwise OOMs the container.
+        """
         cached = self._load_grouped_cache(day)
         if cached is not None:
+            if wanted:
+                return [r for r in cached if str(r.get("T") or "").upper().strip() in wanted]
             return cached
+
         url = f"{_POLYGON_BASE}/v2/aggs/grouped/locale/us/market/stocks/{day.isoformat()}"
         params = {"adjusted": "true", "apiKey": self._api_key}
         resp = self._session.get(url, params=params, timeout=60)
@@ -425,8 +441,21 @@ class PolygonProvider(DataProvider):
             raise RateLimitError("Polygon grouped HTTP 429")
         if resp.status_code != 200:
             raise ProviderError(f"Polygon grouped HTTP {resp.status_code} for {day}: {resp.text[:200]}")
+
         payload = resp.json()
-        results = [item for item in (payload.get("results") or []) if isinstance(item, dict)]
+        raw = payload.get("results") or []
+        if wanted:
+            results = [
+                item
+                for item in raw
+                if isinstance(item, dict)
+                and str(item.get("T") or "").upper().strip() in wanted
+            ]
+        else:
+            results = [item for item in raw if isinstance(item, dict)]
+        # Free the big raw JSON list ASAP — important on 512MB Render Free.
+        del raw
+        payload.clear() if isinstance(payload, dict) else None
         self._save_grouped_cache(day, results)
         return results
 
