@@ -162,7 +162,7 @@ def _css() -> None:
 def _discover_reports() -> list[Path]:
     if not REPORTS_DIR.exists():
         return []
-    files = [p for p in REPORTS_DIR.glob("*_report.csv") if is_official_report_csv(p.name)]
+    files = [p for p in REPORTS_DIR.glob("*_report.csv") if is_official_report_csv(p)]
     apex_first = sorted(files, key=lambda p: ("apex" not in p.name.lower(), -p.stat().st_mtime))
     return apex_first
 
@@ -306,55 +306,17 @@ def _format_remaining(seconds: float) -> str:
     return f"{s}ש׳"
 
 
-def _compute_scan_rate(status: dict, prog: dict) -> dict:
-    """Derive elapsed / rate / ETA from the scan status and progress."""
-    import time
-
-    started_at_raw = status.get("started_at")
+def _scan_percent(prog: dict) -> int:
     try:
-        started_at = float(started_at_raw) if started_at_raw else 0.0
+        return max(0, min(100, int(float(prog.get("percent") or 0))))
     except (TypeError, ValueError):
-        started_at = 0.0
-    elapsed = max(0.0, time.time() - started_at) if started_at > 0 else 0.0
-
-    try:
-        done = int(prog.get("done") or 0)
-    except (TypeError, ValueError):
-        done = 0
-    try:
-        total = int(prog.get("total") or 0)
-    except (TypeError, ValueError):
-        total = 0
-    try:
-        percent = float(prog.get("percent") or 0)
-    except (TypeError, ValueError):
-        percent = 0.0
-
-    rate_symbols = (done / elapsed) if elapsed > 0 and done > 0 else 0.0
-    rate_percent = (percent / elapsed) if elapsed > 0 and percent > 0 else 0.0
-
-    if rate_symbols > 0 and total > done > 0:
-        eta = (total - done) / rate_symbols
-    elif rate_percent > 0 and 0 < percent < 100:
-        eta = (100.0 - percent) / rate_percent
-    else:
-        eta = 0.0
-
-    return {
-        "elapsed": elapsed,
-        "rate_symbols_per_sec": rate_symbols,
-        "rate_percent_per_sec": rate_percent,
-        "eta_seconds": eta,
-        "done": done,
-        "total": total,
-        "percent": percent,
-    }
+        return 0
 
 
 def _render_scan_progress_panel() -> None:
-    """Prominent in-page panel showing % / speed / ETA while a scan runs.
+    """Minimal in-page progress panel: percent + progress bar only.
 
-    Wrapped in a Streamlit fragment so the panel re-renders every 5 seconds
+    Wrapped in a Streamlit fragment so it refreshes every 5 seconds
     without reloading the whole page (no flash, no lost scroll/filter state).
     """
 
@@ -375,31 +337,7 @@ def _render_scan_progress_panel() -> None:
             return
 
         prog = get_scan_progress()
-        stats = _compute_scan_rate(status, prog)
-        percent = max(0.0, min(100.0, stats["percent"]))
-        elapsed_str = _format_remaining(stats["elapsed"]) if stats["elapsed"] else "—"
-        eta_str = _format_remaining(stats["eta_seconds"]) if stats["eta_seconds"] > 0 else "—"
-
-        rate_sym = stats["rate_symbols_per_sec"]
-        rate_pct_per_min = stats["rate_percent_per_sec"] * 60.0
-        if rate_sym >= 1:
-            rate_str = f"{rate_sym:,.1f} מניות/שנייה"
-        elif rate_sym > 0:
-            rate_str = f"{rate_sym * 60:,.1f} מניות/דקה"
-        elif rate_pct_per_min > 0:
-            rate_str = f"{rate_pct_per_min:,.1f}%/דקה"
-        else:
-            rate_str = "מאתחל…"
-
-        done = stats["done"]
-        total = stats["total"]
-        counter = f"{done:,} / {total:,}" if total else (f"{done:,}" if done else "—")
-
-        phase = prog.get("phase") or "סריקה"
-        profile_label = prog.get("profile_label") or status.get("profile_label") or ""
-        title = f"⚡ סריקה רצה · {phase}"
-        if profile_label:
-            title += f" · {profile_label}"
+        percent = _scan_percent(prog)
 
         st.markdown(
             f"""
@@ -407,46 +345,22 @@ def _render_scan_progress_panel() -> None:
                 background: linear-gradient(90deg, rgba(59,130,246,0.12), rgba(234,179,8,0.10));
                 border: 1px solid rgba(59,130,246,0.45);
                 border-radius: 12px;
-                padding: 0.9rem 1.1rem;
-                margin: 0.5rem 0 1rem 0;
+                padding: 0.7rem 1.1rem;
+                margin: 0.5rem 0 0.6rem 0;
+                display:flex;justify-content:space-between;align-items:center;gap:1rem;
             ">
-                <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;">
-                    <strong style="color:#fbbf24;font-size:1.05rem;">{title}</strong>
-                    <span style="color:#e2e8f0;font-size:1.6rem;font-weight:700;">{percent:.0f}%</span>
-                </div>
-                <div style="color:#cbd5e1;margin-top:0.4rem;font-size:0.92rem;">
-                    {prog.get('message', '')}
-                </div>
+                <strong style="color:#fbbf24;font-size:1.05rem;">⚡ סריקה רצה</strong>
+                <span style="color:#e2e8f0;font-size:1.8rem;font-weight:700;">{percent}%</span>
             </div>
             """,
             unsafe_allow_html=True,
         )
+        st.progress(percent / 100.0)
 
-        st.progress(int(percent) / 100.0)
-
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("התקדמות", counter)
-        c2.metric("מהירות", rate_str)
-        c3.metric("זמן שעבר", elapsed_str)
-        c4.metric("נותר (ETA)", eta_str)
-
-        log_tail = prog.get("log_tail") or ""
-        if percent < 15 and stats["elapsed"] > 20 and log_tail:
-            with st.expander("📋 לוג סריקה (לאבחון)", expanded=False):
-                st.code(log_tail[-2000:])
-        elif percent < 5 and stats["elapsed"] > 30:
-            st.info(
-                "הסריקה עוד באתחול (אימות Polygon / טעינת היקום). "
-                "אם תקוע יותר מ-2 דקות — לחץ ⏹ בטל ונסה שוב."
-            )
-
-        cancel_col, refresh_col, _spacer = st.columns([1, 1, 4])
+        cancel_col, _spacer = st.columns([1, 5])
         with cancel_col:
-            if st.button("⏹ בטל סריקה", key="apex_scan_cancel_main", use_container_width=True):
+            if st.button("⏹ בטל", key="apex_scan_cancel_main", use_container_width=True):
                 cancel_scan()
-                _safe_rerun_app()
-        with refresh_col:
-            if st.button("🔄 רענן", key="apex_scan_refresh_main", use_container_width=True):
                 _safe_rerun_app()
 
     _panel()
@@ -544,40 +458,11 @@ def _cloud_scan_ui() -> None:
 
     if state == "running":
         prog = get_scan_progress()
-        stats = _compute_scan_rate(status, prog)
-        percent = max(0.0, min(100.0, stats["percent"]))
-        st.sidebar.progress(int(percent) / 100.0)
-        st.sidebar.caption(prog.get("message", "רץ…"))
-
-        done = stats["done"]
-        total = stats["total"]
-        counter = f"{done:,}/{total:,}" if total else (f"{done:,}" if done else "—")
-        rate_sym = stats["rate_symbols_per_sec"]
-        if rate_sym >= 1:
-            rate_str = f"{rate_sym:,.1f}/ש"
-        elif rate_sym > 0:
-            rate_str = f"{rate_sym * 60:,.0f}/דק"
-        else:
-            rate_pct_per_min = stats["rate_percent_per_sec"] * 60.0
-            rate_str = f"{rate_pct_per_min:.1f}%/דק" if rate_pct_per_min > 0 else "—"
-        elapsed_str = _format_remaining(stats["elapsed"]) if stats["elapsed"] else "—"
-        eta_str = _format_remaining(stats["eta_seconds"]) if stats["eta_seconds"] > 0 else "—"
-
-        sm1, sm2 = st.sidebar.columns(2)
-        sm1.metric("התקדמות", counter)
-        sm2.metric("מהירות", rate_str)
-        sm3, sm4 = st.sidebar.columns(2)
-        sm3.metric("עבר", elapsed_str)
-        sm4.metric("נותר", eta_str)
-
-        cancel_col, refresh_col = st.sidebar.columns(2)
-        with cancel_col:
-            if st.button("⏹ בטל", use_container_width=True, key="apex_scan_cancel"):
-                cancel_scan()
-                st.rerun()
-        with refresh_col:
-            if st.button("🔄 רענן", use_container_width=True, key="apex_scan_refresh"):
-                st.rerun()
+        percent = _scan_percent(prog)
+        st.sidebar.progress(percent / 100.0)
+        if st.sidebar.button("⏹ בטל", use_container_width=True, key="apex_scan_cancel"):
+            cancel_scan()
+            st.rerun()
         # Fragment-based refresh (no full page reload) handles live updates of
         # the in-page progress panel. Legacy fallback only kicks in on very old
         # Streamlit builds without st.fragment.
