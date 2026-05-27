@@ -352,85 +352,136 @@ def _compute_scan_rate(status: dict, prog: dict) -> dict:
 
 
 def _render_scan_progress_panel() -> None:
-    """Prominent in-page panel showing % / speed / ETA while a scan runs."""
+    """Prominent in-page panel showing % / speed / ETA while a scan runs.
+
+    Wrapped in a Streamlit fragment so the panel re-renders every 5 seconds
+    without reloading the whole page (no flash, no lost scroll/filter state).
+    """
+
+    @_fragment_decorator(5)
+    def _panel() -> None:
+        try:
+            from src.cloud_scan_job import cancel_scan, get_scan_progress, get_status
+        except ImportError:
+            return
+
+        status = get_status()
+        current_state = status.get("state", "idle")
+        last_state = st.session_state.get("apex_last_scan_state")
+        st.session_state["apex_last_scan_state"] = current_state
+        if current_state != "running":
+            if last_state == "running":
+                _safe_rerun_app()
+            return
+
+        prog = get_scan_progress()
+        stats = _compute_scan_rate(status, prog)
+        percent = max(0.0, min(100.0, stats["percent"]))
+        elapsed_str = _format_remaining(stats["elapsed"]) if stats["elapsed"] else "—"
+        eta_str = _format_remaining(stats["eta_seconds"]) if stats["eta_seconds"] > 0 else "—"
+
+        rate_sym = stats["rate_symbols_per_sec"]
+        rate_pct_per_min = stats["rate_percent_per_sec"] * 60.0
+        if rate_sym >= 1:
+            rate_str = f"{rate_sym:,.1f} מניות/שנייה"
+        elif rate_sym > 0:
+            rate_str = f"{rate_sym * 60:,.1f} מניות/דקה"
+        elif rate_pct_per_min > 0:
+            rate_str = f"{rate_pct_per_min:,.1f}%/דקה"
+        else:
+            rate_str = "מאתחל…"
+
+        done = stats["done"]
+        total = stats["total"]
+        counter = f"{done:,} / {total:,}" if total else (f"{done:,}" if done else "—")
+
+        phase = prog.get("phase") or "סריקה"
+        profile_label = prog.get("profile_label") or status.get("profile_label") or ""
+        title = f"⚡ סריקה רצה · {phase}"
+        if profile_label:
+            title += f" · {profile_label}"
+
+        st.markdown(
+            f"""
+            <div style="
+                background: linear-gradient(90deg, rgba(59,130,246,0.12), rgba(234,179,8,0.10));
+                border: 1px solid rgba(59,130,246,0.45);
+                border-radius: 12px;
+                padding: 0.9rem 1.1rem;
+                margin: 0.5rem 0 1rem 0;
+            ">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;">
+                    <strong style="color:#fbbf24;font-size:1.05rem;">{title}</strong>
+                    <span style="color:#e2e8f0;font-size:1.6rem;font-weight:700;">{percent:.0f}%</span>
+                </div>
+                <div style="color:#cbd5e1;margin-top:0.4rem;font-size:0.92rem;">
+                    {prog.get('message', '')}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.progress(int(percent) / 100.0)
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("התקדמות", counter)
+        c2.metric("מהירות", rate_str)
+        c3.metric("זמן שעבר", elapsed_str)
+        c4.metric("נותר (ETA)", eta_str)
+
+        log_tail = prog.get("log_tail") or ""
+        if percent < 15 and stats["elapsed"] > 20 and log_tail:
+            with st.expander("📋 לוג סריקה (לאבחון)", expanded=False):
+                st.code(log_tail[-2000:])
+        elif percent < 5 and stats["elapsed"] > 30:
+            st.info(
+                "הסריקה עוד באתחול (אימות Polygon / טעינת היקום). "
+                "אם תקוע יותר מ-2 דקות — לחץ ⏹ בטל ונסה שוב."
+            )
+
+        cancel_col, refresh_col, _spacer = st.columns([1, 1, 4])
+        with cancel_col:
+            if st.button("⏹ בטל סריקה", key="apex_scan_cancel_main", use_container_width=True):
+                cancel_scan()
+                _safe_rerun_app()
+        with refresh_col:
+            if st.button("🔄 רענן", key="apex_scan_refresh_main", use_container_width=True):
+                _safe_rerun_app()
+
+    _panel()
+
+
+def _safe_rerun_app() -> None:
+    """Trigger a full app rerun even when called from inside a fragment."""
     try:
-        from src.cloud_scan_job import cancel_scan, get_scan_progress, get_status
-    except ImportError:
-        return
+        st.rerun(scope="app")
+    except TypeError:
+        st.rerun()
 
-    status = get_status()
-    if status.get("state") != "running":
-        return
 
-    prog = get_scan_progress()
-    stats = _compute_scan_rate(status, prog)
-    percent = max(0.0, min(100.0, stats["percent"]))
-    elapsed_str = _format_remaining(stats["elapsed"]) if stats["elapsed"] else "—"
-    eta_str = _format_remaining(stats["eta_seconds"]) if stats["eta_seconds"] > 0 else "—"
+def _fragment_decorator(run_every_seconds: int):
+    """Return a Streamlit fragment decorator that re-runs every N seconds.
 
-    rate_sym = stats["rate_symbols_per_sec"]
-    rate_pct_per_min = stats["rate_percent_per_sec"] * 60.0
-    if rate_sym >= 1:
-        rate_str = f"{rate_sym:,.1f} מניות/שנייה"
-    elif rate_sym > 0:
-        rate_str = f"{rate_sym * 60:,.1f} מניות/דקה"
-    elif rate_pct_per_min > 0:
-        rate_str = f"{rate_pct_per_min:,.1f}%/דקה"
-    else:
-        rate_str = "מאתחל…"
+    Falls back to a no-op (no auto-refresh) on Streamlit versions without
+    ``st.fragment`` / ``st.experimental_fragment``. Using a fragment avoids
+    reloading the whole page (no flash, scroll preserved, filters preserved).
+    """
+    spec = f"{max(1, int(run_every_seconds))}s"
+    if hasattr(st, "fragment"):
+        return st.fragment(run_every=spec)
+    if hasattr(st, "experimental_fragment"):
+        return st.experimental_fragment(run_every=spec)
+    return lambda func: func
 
-    done = stats["done"]
-    total = stats["total"]
-    counter = f"{done:,} / {total:,}" if total else f"{done:,}" if done else "—"
 
-    phase = prog.get("phase") or "סריקה"
-    profile_label = prog.get("profile_label") or status.get("profile_label") or ""
-    title = f"⚡ סריקה רצה · {phase}"
-    if profile_label:
-        title += f" · {profile_label}"
-
-    st.markdown(
-        f"""
-        <div style="
-            background: linear-gradient(90deg, rgba(59,130,246,0.12), rgba(234,179,8,0.10));
-            border: 1px solid rgba(59,130,246,0.45);
-            border-radius: 12px;
-            padding: 0.9rem 1.1rem;
-            margin: 0.5rem 0 1rem 0;
-        ">
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;">
-                <strong style="color:#fbbf24;font-size:1.05rem;">{title}</strong>
-                <span style="color:#e2e8f0;font-size:1.6rem;font-weight:700;">{percent:.0f}%</span>
-            </div>
-            <div style="color:#cbd5e1;margin-top:0.4rem;font-size:0.92rem;">
-                {prog.get('message', '')}
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.progress(int(percent) / 100.0)
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("התקדמות", counter)
-    c2.metric("מהירות", rate_str)
-    c3.metric("זמן שעבר", elapsed_str)
-    c4.metric("נותר (ETA)", eta_str)
-
-    cancel_col, refresh_col, _spacer = st.columns([1, 1, 4])
-    with cancel_col:
-        if st.button("⏹ בטל סריקה", key="apex_scan_cancel_main", use_container_width=True):
-            cancel_scan()
-            st.rerun()
-    with refresh_col:
-        if st.button("🔄 רענן", key="apex_scan_refresh_main", use_container_width=True):
-            st.rerun()
+def _has_fragment_autorefresh() -> bool:
+    return hasattr(st, "fragment") or hasattr(st, "experimental_fragment")
 
 
 def _inject_auto_refresh(interval_seconds: int) -> None:
-    """Force the Streamlit page to reload itself periodically (HF/Render-safe)."""
-    if interval_seconds <= 0:
+    """Fallback page-reload mechanism for Streamlit builds without fragments."""
+    if interval_seconds <= 0 or _has_fragment_autorefresh():
         return
     import streamlit.components.v1 as components
 
@@ -527,7 +578,10 @@ def _cloud_scan_ui() -> None:
         with refresh_col:
             if st.button("🔄 רענן", use_container_width=True, key="apex_scan_refresh"):
                 st.rerun()
-        _inject_auto_refresh(10)
+        # Fragment-based refresh (no full page reload) handles live updates of
+        # the in-page progress panel. Legacy fallback only kicks in on very old
+        # Streamlit builds without st.fragment.
+        _inject_auto_refresh(30)
     else:
         if st.sidebar.button(
             "▶ הרץ Apex Scan עכשיו",
@@ -551,7 +605,7 @@ def _cloud_scan_ui() -> None:
                 st.sidebar.caption("סריקה אוטומטית: מתחילה כעת…")
             else:
                 st.sidebar.caption(f"⏱ סריקה אוטומטית הבאה בעוד {_format_remaining(remaining)}")
-            poll = max(30, min(300, int(remaining))) if remaining > 0 else 5
+            poll = max(60, min(300, int(remaining))) if remaining > 0 else 10
             _inject_auto_refresh(poll)
         else:
             st.sidebar.caption("סריקה אוטומטית כבויה — לחץ על הכפתור להרצה ידנית")

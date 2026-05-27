@@ -59,12 +59,12 @@ def validate_polygon_api_key(key: str | None = None) -> tuple[bool, str]:
     try:
         for url, auth_mode in _CHECK_URLS:
             if auth_mode == "query":
-                resp = requests.get(url, params={"apiKey": key}, timeout=25)
+                resp = requests.get(url, params={"apiKey": key}, timeout=10)
             else:
                 resp = requests.get(
                     url,
                     headers={"Authorization": f"Bearer {key}"},
-                    timeout=25,
+                    timeout=10,
                 )
             if resp.status_code == 200:
                 return True, "ok"
