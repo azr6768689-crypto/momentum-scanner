@@ -149,15 +149,26 @@ class RejectionRecord:
     score: int | None = None     # final score if rejection happened post-scoring
 
 
+_MAX_RECORDS = 5000
+_NO_PATTERN_SAMPLE_RATE = 10
+
+
 class DiagnosticsCollector:
     """Threadsafe-ish collector of rejection events.
 
     Phase 1 is single-threaded so we don't bother with locks, but the dict
     structure is append-only so adding locking later is trivial.
+
+    To prevent memory explosion on large universes (3000+ tickers × 3
+    scanners × 2 strategies = 18K+ records), ``no_pattern_matched`` events
+    are sampled (1 in 10) and aggregate counts are always maintained.
     """
 
     def __init__(self) -> None:
         self.records: list[RejectionRecord] = []
+        self._reason_counts: Counter[str] = Counter()
+        self._stage_counts: Counter[str] = Counter()
+        self._strategy_reason_counts: Counter[tuple[str, str]] = Counter()
         # Universe-level facts (set once per run)
         self.universe_size: int = 0
         self.fetched: int = 0
@@ -166,6 +177,7 @@ class DiagnosticsCollector:
         self.tickers_in_main_report: set[str] = set()
         self.tickers_in_watch_only: set[str] = set()
         self.tickers_in_rejected_csv: set[str] = set()
+        self._no_pattern_counter: int = 0
 
     # -- Recording --------------------------------------------------------
 
@@ -178,8 +190,26 @@ class DiagnosticsCollector:
         snapshot_summary: str = "",
         score: int | None = None,
     ) -> None:
-        """Record one rejection event."""
+        """Record one rejection event.
+
+        Counts are always updated.  Individual records are capped at
+        ``_MAX_RECORDS``, and ``no_pattern_matched`` events are sampled
+        1-in-N to avoid 18K+ records on large universes.
+        """
         stage = STAGE_OF_REASON.get(reason_code, "0_other")
+        self._reason_counts[reason_code] += 1
+        self._stage_counts[stage] += 1
+        if strategy:
+            self._strategy_reason_counts[(strategy, reason_code)] += 1
+
+        if reason_code == REASON_NO_PATTERN:
+            self._no_pattern_counter += 1
+            if self._no_pattern_counter % _NO_PATTERN_SAMPLE_RATE != 1:
+                return
+
+        if len(self.records) >= _MAX_RECORDS:
+            return
+
         self.records.append(RejectionRecord(
             ticker=ticker,
             stage=stage,
@@ -209,12 +239,12 @@ class DiagnosticsCollector:
     # -- Aggregation ------------------------------------------------------
 
     def by_reason(self) -> Counter[str]:
-        """Count rejections per reason code."""
-        return Counter(r.reason_code for r in self.records)
+        """Count rejections per reason code (uses exact counters, not sampled records)."""
+        return Counter(self._reason_counts)
 
     def by_stage(self) -> Counter[str]:
-        """Count rejections per stage."""
-        return Counter(r.stage for r in self.records)
+        """Count rejections per stage (uses exact counters, not sampled records)."""
+        return Counter(self._stage_counts)
 
     def by_ticker(self) -> dict[str, list[RejectionRecord]]:
         """All rejections grouped by ticker."""
@@ -224,12 +254,8 @@ class DiagnosticsCollector:
         return dict(result)
 
     def by_strategy_and_reason(self) -> dict[tuple[str, str], int]:
-        """Count rejections per (strategy, reason)."""
-        counts: dict[tuple[str, str], int] = defaultdict(int)
-        for r in self.records:
-            if r.strategy:
-                counts[(r.strategy, r.reason_code)] += 1
-        return dict(counts)
+        """Count rejections per (strategy, reason) (exact counts)."""
+        return dict(self._strategy_reason_counts)
 
     def summary_by_category(self) -> dict[str, int]:
         """Group rejections into the user-facing categories for the summary.

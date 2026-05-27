@@ -14,6 +14,8 @@ and read-only. Without it, scanner runs exactly as before.
 from __future__ import annotations
 
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import pandas as pd
@@ -158,15 +160,43 @@ class BaseScanner:
         If `snapshots` is provided, reuses precomputed snapshots (much faster).
         If `progress_callback(idx, total, ticker)` is provided, it's called
         every iteration.
+
+        Uses thread-parallelism when the universe is large enough to benefit.
         """
-        all_signals: list[SetupSignal] = []
         total = len(universe)
-        for i, (ticker, df) in enumerate(universe.items(), start=1):
+        try:
+            workers = max(1, int(os.getenv("SCAN_SCANNER_WORKERS", "4")))
+        except ValueError:
+            workers = 4
+        workers = min(workers, 8)
+
+        if total < 100 or workers <= 1:
+            all_signals: list[SetupSignal] = []
+            for i, (ticker, df) in enumerate(universe.items(), start=1):
+                snap = snapshots.get(ticker) if snapshots else None
+                sigs = self.scan_ticker(ticker, df, snapshot=snap)
+                all_signals.extend(sigs)
+                if progress_callback is not None:
+                    progress_callback(i, total, ticker)
+            return all_signals
+
+        all_signals = []
+        items = list(universe.items())
+
+        def _scan_one(ticker_df: tuple[str, pd.DataFrame]) -> tuple[str, list[SetupSignal]]:
+            ticker, df = ticker_df
             snap = snapshots.get(ticker) if snapshots else None
-            sigs = self.scan_ticker(ticker, df, snapshot=snap)
-            all_signals.extend(sigs)
-            if progress_callback is not None:
-                progress_callback(i, total, ticker)
+            return ticker, self.scan_ticker(ticker, df, snapshot=snap)
+
+        done = 0
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_scan_one, item): item[0] for item in items}
+            for future in as_completed(futures):
+                ticker, sigs = future.result()
+                all_signals.extend(sigs)
+                done += 1
+                if progress_callback is not None:
+                    progress_callback(done, total, ticker)
         return all_signals
 
     # --- Override point for subclasses ---

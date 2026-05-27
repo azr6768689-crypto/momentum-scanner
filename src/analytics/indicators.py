@@ -393,30 +393,55 @@ def compute_snapshot(df: pd.DataFrame) -> IndicatorSnapshot | None:
 
     Returns None if the frame is empty or doesn't have enough bars to compute
     the minimal set (we require SMA50 + ATR14, so at least 50 bars).
+
+    All intermediate series (SMA20, SMA50, ATR14) are computed once and
+    reused by dependent indicators to avoid redundant rolling-window passes.
     """
     _validate_ohlcv(df)
     if len(df) < 50:
         return None
 
-    s20 = sma20(df)
-    s50 = sma50(df)
-    s200 = sma200(df) if len(df) >= 200 else None
-    a14 = atr(df, 14)
-    av20 = avg_volume(df, 20)
-    rv20 = relative_volume(df, 20)
-    dv20 = dollar_volume(df, 20)
-    d1 = daily_pct_change(df)
-    d_s20 = distance_from_sma20(df)
-    d_s50 = distance_from_sma50(df)
-    atr_ext_s20 = atr_extension(df, s20, 14)
-    h20 = high_20d(df)
-    h50 = high_50d(df)
-    h52w = high_52w(df) if len(df) >= 252 else None
-    prior_h20 = prior_rolling_high(df, 20)
-    prior_h50 = prior_rolling_high(df, 50)
-    bd20 = breakout_distance(df, 20)
-    bd50 = breakout_distance(df, 50)
-    tr = trend_condition(df)
+    close = df["close"]
+
+    s20 = sma(close, 20).rename("sma20")
+    s50 = sma(close, 50).rename("sma50")
+    s200 = sma(close, 200).rename("sma200") if len(df) >= 200 else None
+
+    tr_series = true_range(df)
+    a14 = tr_series.ewm(alpha=1.0 / 14, adjust=False, min_periods=14).mean().rename("atr14")
+
+    av20 = df["volume"].rolling(window=20, min_periods=20).mean().rename("avg_volume_20")
+    rv20 = (df["volume"] / av20).rename("rvol_20")
+    dv20 = (close * df["volume"]).rolling(window=20, min_periods=20).mean().rename("dollar_volume_20")
+    d1 = (close.pct_change(periods=1) * 100.0).rename("pct_change_1d")
+
+    d_s20 = ((close / s20) - 1.0) * 100.0
+    d_s50 = ((close / s50) - 1.0) * 100.0
+    atr_ext_s20 = ((close - s20) / a14).rename("atr_ext_14")
+
+    h20 = df["high"].rolling(window=20, min_periods=20).max().rename("high_20d")
+    h50 = df["high"].rolling(window=50, min_periods=50).max().rename("high_50d")
+    h52w = df["high"].rolling(window=252, min_periods=252).max().rename("high_52w") if len(df) >= 252 else None
+    prior_h20 = df["high"].shift(1).rolling(window=20, min_periods=20).max().rename("prior_high_20")
+    prior_h50 = df["high"].shift(1).rolling(window=50, min_periods=50).max().rename("prior_high_50")
+    bd20 = ((close / prior_h20) - 1.0) * 100.0
+    bd50 = ((close / prior_h50) - 1.0) * 100.0
+
+    s50_slope = s50 - s50.shift(10)
+    s50_rising = s50_slope > 0
+    s50_flat = s50_slope.abs() / s50 * 100.0 < 1.0
+    pct_from_s50 = (close / s50 - 1.0) * 100.0
+    tr_labels = pd.Series(TREND_INSUFFICIENT, index=df.index, dtype="object")
+    have_data = s20.notna() & s50.notna() & s50_slope.notna()
+    cond_strong = have_data & (close > s20) & (s20 > s50) & s50_rising
+    cond_weak = have_data & (close > s50) & ~cond_strong
+    cond_side = have_data & (pct_from_s50.abs() < 2.0) & s50_flat
+    cond_down = have_data & (close < s50) & ~s50_rising
+    tr_labels = tr_labels.where(~cond_down, TREND_DOWNTREND)
+    tr_labels = tr_labels.where(~cond_side, TREND_SIDEWAYS)
+    tr_labels = tr_labels.where(~cond_weak, TREND_UPTREND_WEAK)
+    tr_labels = tr_labels.where(~cond_strong, TREND_UPTREND_STRONG)
+    tr = tr_labels.rename("trend")
 
     last = df.iloc[-1]
 

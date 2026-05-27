@@ -132,18 +132,56 @@ def _fetch_universe_data(
     provider: DataProvider,
     history_years: int,
 ) -> dict[str, pd.DataFrame]:
-    """Fetch OHLCV for all tickers."""
+    """Fetch OHLCV for all tickers.
+
+    Uses the provider's bulk load when available (Polygon grouped daily),
+    otherwise falls back to parallel per-symbol fetching.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import os
+
     end = date.today()
     start = end - timedelta(days=int(history_years * 365.25))
 
-    universe: dict[str, pd.DataFrame] = {}
-    for sym in tickers:
+    if hasattr(provider, "load_universe_daily_bars") and len(tickers) >= 80:
+        try:
+            raw = provider.load_universe_daily_bars(tickers, start, end)
+            universe: dict[str, pd.DataFrame] = {}
+            for sym in tickers:
+                df = raw.get(sym.upper().strip())
+                if df is not None and not df.empty and len(df) >= 50:
+                    universe[sym] = df
+            log.info("Bulk load: %d/%d tickers usable", len(universe), len(tickers))
+            return universe
+        except Exception as exc:
+            log.warning("Bulk load failed, falling back to parallel per-symbol: %s", exc)
+
+    try:
+        workers = max(1, int(os.getenv("SCAN_WORKERS", "4")))
+    except ValueError:
+        workers = 4
+    workers = min(workers, 16)
+
+    universe = {}
+
+    def _fetch_one(sym: str) -> tuple[str, pd.DataFrame | None]:
         try:
             df = provider.get_daily_bars(sym, start, end)
             if not df.empty and len(df) >= 50:
-                universe[sym] = df
+                return sym, df
         except Exception as exc:
             log.warning("Failed to fetch %s: %s", sym, exc)
+        return sym, None
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_fetch_one, sym): sym for sym in tickers}
+        for future in as_completed(futures):
+            try:
+                sym, df = future.result(timeout=120)
+                if df is not None:
+                    universe[sym] = df
+            except Exception as exc:
+                log.warning("Fetch timeout/error for %s: %s", futures[future], exc)
 
     return universe
 
