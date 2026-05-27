@@ -21,6 +21,7 @@ copy "$ROOT/dashboard" "dashboard"
 copy "$ROOT/src" "src"
 copy "$ROOT/config" "config"
 copy "$ROOT/scripts/run_pro_scanner.py" "scripts/run_pro_scanner.py"
+copy "$ROOT/scripts/run_apex_scanner.py" "scripts/run_apex_scanner.py"
 copy "$ROOT/scripts/cloud_scan_runner.py" "scripts/cloud_scan_runner.py"
 copy "$ROOT/DEPLOY_VERSION.txt" "DEPLOY_VERSION.txt"
 copy "$ROOT/data/universe/polygon_liquid_us.csv" "data/universe/polygon_liquid_us.csv"
@@ -42,11 +43,15 @@ fi
 cp "$ROOT/README_HF.md" "$OUT/README.md"
 
 mkdir -p "$OUT/.streamlit"
-cat > "$OUT/.streamlit/config.toml" <<'EOF'
+if [[ -f "$ROOT/.streamlit/config.toml" ]]; then
+  cp "$ROOT/.streamlit/config.toml" "$OUT/.streamlit/config.toml"
+else
+  cat > "$OUT/.streamlit/config.toml" <<'EOF'
 [server]
 headless = true
 enableCORS = false
 EOF
+fi
 
 rm -rf "$OUT/**/__pycache__" "$OUT/**/.DS_Store" 2>/dev/null || true
 find "$OUT" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true

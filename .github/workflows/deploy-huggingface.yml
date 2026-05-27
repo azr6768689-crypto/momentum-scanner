@@ -1,0 +1,40 @@
+name: Deploy Hugging Face Space
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dashboard/**"
+      - "src/**"
+      - "streamlit_app.py"
+      - "requirements.txt"
+      - "scripts/prepare_hf_upload.sh"
+      - "scripts/upload_to_huggingface.py"
+      - "scripts/run_apex_scanner.py"
+      - "scripts/cloud_scan_runner.py"
+      - "DEPLOY_VERSION.txt"
+      - ".github/workflows/deploy-huggingface.yml"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Prepare upload bundle
+        run: bash scripts/prepare_hf_upload.sh
+
+      - name: Upload to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_USERNAME: ${{ secrets.HF_USERNAME }}
+          HF_SPACE_NAME: momentum-scanner
+          HF_COMMIT_MESSAGE: "Deploy ${{ github.sha }} — sidebar open + scan update"
+        run: |
+          pip install -q huggingface_hub
+          python3 scripts/upload_to_huggingface.py

@@ -12,7 +12,7 @@ UPLOAD_DIR = ROOT / "hf_space_upload"
 
 def main() -> int:
     token = os.getenv("HF_TOKEN", "").strip()
-    username = os.getenv("HF_USERNAME", "").strip()
+    username = os.getenv("HF_USERNAME", "azr6768689").strip()
     space_name = os.getenv("HF_SPACE_NAME", "momentum-scanner").strip()
 
     if not token:
