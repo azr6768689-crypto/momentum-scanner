@@ -15,6 +15,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
+import streamlit.components.v1 as components
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -166,11 +167,33 @@ def _require_password() -> None:
     st.stop()
 
 
+if "apex_sidebar_state" not in st.session_state:
+    st.session_state.apex_sidebar_state = "expanded"
+
+
+def _on_open_sidebar_click() -> None:
+    """Force sidebar visible — nudge collapsed→expanded when state was already 'expanded'."""
+    if st.session_state.apex_sidebar_state == "expanded":
+        st.session_state.apex_sidebar_state = "collapsed"
+        st.session_state.apex_sidebar_open_on_next_run = True
+    else:
+        st.session_state.apex_sidebar_state = "expanded"
+
+
+def _sync_sidebar_page_config() -> None:
+    st.set_page_config(
+        page_title=f"{BRAND} | Institutional Scanner",
+        page_icon="⚡",
+        layout="wide",
+        initial_sidebar_state=st.session_state.apex_sidebar_state,
+    )
+
+
 st.set_page_config(
     page_title=f"{BRAND} | Institutional Scanner",
     page_icon="⚡",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state=st.session_state.apex_sidebar_state,
 )
 
 
@@ -198,10 +221,164 @@ def _css() -> None:
         }
         div[data-testid="stMetric"] label { color: #94a3b8 !important; }
         div[data-testid="stMetric"] div[data-testid="stMetricValue"] { color: #f1f5f9 !important; }
+        .apex-sidebar-toolbar {
+            background: rgba(15, 23, 42, 0.92);
+            border: 1px solid rgba(234, 179, 8, 0.45);
+            border-radius: 12px;
+            padding: 0.65rem 0.85rem;
+            margin: 0 0 0.85rem 0;
+        }
+        .apex-sidebar-toolbar-title {
+            color: #fbbf24;
+            font-weight: 700;
+            font-size: 0.95rem;
+            margin-bottom: 0.15rem;
+        }
+        .apex-sidebar-toolbar-hint {
+            color: #94a3b8;
+            font-size: 0.82rem;
+            margin-bottom: 0.45rem;
+        }
+        [data-testid="stSidebarCollapsedControl"] {
+            position: fixed !important;
+            top: 0.65rem !important;
+            left: 0.65rem !important;
+            z-index: 999990 !important;
+            background: rgba(234, 179, 8, 0.92) !important;
+            border-radius: 10px !important;
+            padding: 0.35rem 0.5rem !important;
+            box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45) !important;
+        }
+        [data-testid="stSidebarCollapsedControl"] button {
+            color: #0f172a !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
     )
+
+
+def _inject_open_sidebar_script() -> None:
+    """Click Streamlit's native sidebar expand control (fallback when page config nudge fails)."""
+    components.html(
+        """
+        <script>
+        (function () {
+            function parentDoc() {
+                try { return window.parent.document; } catch (e) { return document; }
+            }
+            window.__apexOpenSidebar = function () {
+                var doc = parentDoc();
+                var selectors = [
+                    '[data-testid="stSidebarCollapsedControl"] button',
+                    '[data-testid="stSidebarCollapsedControl"]',
+                    '[data-testid="collapsedControl"]',
+                    'button[kind="headerNoPadding"]'
+                ];
+                for (var i = 0; i < selectors.length; i++) {
+                    var el = doc.querySelector(selectors[i]);
+                    if (el) { el.click(); return true; }
+                }
+                return false;
+            };
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
+
+def _render_open_sidebar_toolbar() -> None:
+    """Always-visible main-area control — sidebar may be collapsed on mobile / HF."""
+    st.markdown(
+        """
+        <div class="apex-sidebar-toolbar">
+            <div class="apex-sidebar-toolbar-title">☰ תפריט צד (סריקה · Polygon · מסננים)</div>
+            <div class="apex-sidebar-toolbar-hint">
+                הסרגל סגור? לחץ על הכפתור הצהוב למטה, או על החץ › בפינה השמאלית העליונה.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    col_open, col_js = st.columns([1, 1])
+    with col_open:
+        st.button(
+            "☰ פתח סרגל",
+            type="primary",
+            use_container_width=True,
+            key="apex_open_sidebar_main",
+            on_click=_on_open_sidebar_click,
+            help="מציג את הסרגל עם עדכון סריקה, מפתח Polygon ומסנני דוח",
+        )
+    with col_js:
+        if st.button(
+            "↗ פתיחה מהירה",
+            use_container_width=True,
+            key="apex_open_sidebar_js",
+            help="גיבוי — לוחץ על כפתור הסרגל המובנה של Streamlit",
+        ):
+            components.html(
+                """
+                <script>
+                (function () {
+                    function parentDoc() {
+                        try { return window.parent.document; } catch (e) { return document; }
+                    }
+                    var doc = parentDoc();
+                    var selectors = [
+                        '[data-testid="stSidebarCollapsedControl"] button',
+                        '[data-testid="stSidebarCollapsedControl"]',
+                        '[data-testid="collapsedControl"]'
+                    ];
+                    for (var i = 0; i < selectors.length; i++) {
+                        var el = doc.querySelector(selectors[i]);
+                        if (el) { el.click(); break; }
+                    }
+                })();
+                </script>
+                """,
+                height=0,
+            )
+    _inject_open_sidebar_script()
+
+
+def _render_main_scan_bar() -> None:
+    """Scan actions in the main page — usable when the sidebar is hidden."""
+    try:
+        from src.cloud_scan_job import cancel_scan, get_status
+    except ImportError:
+        return
+
+    status = get_status()
+    state = status.get("state", "idle")
+    has_report = _has_existing_scan_report()
+    run_label = "🔄 עדכון סריקה" if has_report else "▶ הרץ סריקה"
+
+    st.markdown("**פעולות סריקה (בלי לפתוח סרגל)**")
+    c1, c2, c3 = st.columns([1.4, 1, 1])
+    with c1:
+        if state != "running":
+            if st.button(run_label, type="primary", use_container_width=True, key="apex_scan_main_run"):
+                started, msg = _start_apex_scan()
+                if started:
+                    st.success(msg)
+                else:
+                    st.warning(msg)
+                st.rerun()
+        else:
+            st.caption("סריקה רצה — התקדמות למטה")
+    with c2:
+        if state == "running" and st.button("⏹ בטל", use_container_width=True, key="apex_scan_main_cancel"):
+            cancel_scan()
+            st.rerun()
+    with c3:
+        st.button(
+            "☰ סרגל",
+            use_container_width=True,
+            key="apex_scan_main_open_sidebar",
+            on_click=_on_open_sidebar_click,
+        )
 
 
 def _discover_reports() -> list[Path]:
@@ -668,7 +845,11 @@ def _cloud_scan_ui() -> None:
 
 def main() -> None:
     _require_password()
+    if st.session_state.pop("apex_sidebar_open_on_next_run", False):
+        st.session_state.apex_sidebar_state = "expanded"
+    _sync_sidebar_page_config()
     _css()
+    _render_open_sidebar_toolbar()
     st.markdown(
         f"""
         <div class="apex-hero">
@@ -688,13 +869,14 @@ def main() -> None:
     elif _provider() == "polygon":
         st.success("**נתוני שוק אמיתיים** — Polygon (מחירים מותאמים, ~2,114 מניות נזילות US)")
 
+    _render_main_scan_bar()
     _cloud_scan_ui()
     _render_scan_progress_panel()
 
     reports = _discover_reports()
     if not reports:
         st.info(
-            "אין דוח. לחץ **▶ הרץ Apex Scan עכשיו** בסרגל (סעיף סריקה) "
+            "אין דוח. לחץ **▶ הרץ סריקה** למעלה (בלי סרגל) או **▶ הרץ Apex Scan** בסרגל "
             "או הרץ: `python scripts/run_apex_scanner.py`"
         )
         if st.button("הרץ סריקה מקומית (דמו)", type="primary"):
