@@ -38,11 +38,18 @@ services:
         value: "true"
       - key: SCAN_POLYGON_BULK
         value: "true"
-      # 90 trading days = ~4.5 months. Enough for RS / momentum / 50d MA /
-      # breakout patterns. Lower than the 126 default to halve API calls for
-      # users on Polygon free tier (5 req/min). Raise to 126 if on Starter+.
+      # 126 trading days = ~6 months. Safe on Polygon Starter+ (unlimited
+      # calls). Lower to 90 if you're on Polygon Free (5 req/min limit).
       - key: SCAN_TRIM_BARS
-        value: "90"
+        value: "126"
+      # Parallel grouped-daily fetches. 8 = ~8x faster on Polygon Starter+
+      # (unlimited). Set to 1 if you're on Polygon Free tier.
+      - key: SCAN_POLYGON_GROUPED_WORKERS
+        value: "8"
+      # Pause between requests. 0 for Polygon Starter+ (unlimited).
+      # Set to ~12 if you're on Polygon Free (5 req/min limit).
+      - key: SCAN_POLYGON_PAUSE
+        value: "0"
       - key: APEX_LIVE_REFRESH_SEC
         value: "60"
       - key: APEX_LIVE_WORKERS
