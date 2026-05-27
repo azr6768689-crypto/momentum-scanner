@@ -376,7 +376,10 @@ class PolygonProvider(DataProvider):
             return [item for item in results if isinstance(item, dict)]
 
     def _grouped_cache_path(self, day: date) -> Path:
-        cache_dir = self._cache.cache_dir.parent / "polygon_grouped"
+        # v2: previous version used universe-filtered caches which became
+        # poisoned when the universe changed between runs. v2 always caches
+        # the full per-day response and filters at read time.
+        cache_dir = self._cache.cache_dir.parent / "polygon_grouped_v2"
         cache_dir.mkdir(parents=True, exist_ok=True)
         return cache_dir / f"{day.isoformat()}.parquet"
 
@@ -414,13 +417,14 @@ class PolygonProvider(DataProvider):
     ) -> list[dict[str, Any]]:
         """Fetch grouped daily bars for a single day.
 
-        When ``wanted`` is given, only rows for those tickers are kept in
-        memory and cached. This is critical on small-RAM hosts (Render Free,
-        512MB) where keeping all ~8,000 US stocks per day for 126 days at 8x
-        parallelism otherwise OOMs the container.
+        Caches the FULL Polygon response (parquet, per day). When ``wanted``
+        is given, filters the returned list down to those tickers at read
+        time. Caching the full response avoids stale-cache poisoning when
+        the universe size changes between runs (e.g. SCAN_CLOUD_MAX_SYMBOLS
+        edited in Render env).
         """
         cached = self._load_grouped_cache(day)
-        if cached is not None:
+        if cached is not None and len(cached) > 0:
             if wanted:
                 return [r for r in cached if str(r.get("T") or "").upper().strip() in wanted]
             return cached
@@ -443,21 +447,16 @@ class PolygonProvider(DataProvider):
             raise ProviderError(f"Polygon grouped HTTP {resp.status_code} for {day}: {resp.text[:200]}")
 
         payload = resp.json()
-        raw = payload.get("results") or []
+        all_rows = [item for item in (payload.get("results") or []) if isinstance(item, dict)]
+        # Cache the full response so universe changes don't poison the cache.
+        # Disk cost is ~250KB/day parquet for ~8K stocks; ~30MB for 120 days.
+        self._save_grouped_cache(day, all_rows)
         if wanted:
-            results = [
-                item
-                for item in raw
-                if isinstance(item, dict)
-                and str(item.get("T") or "").upper().strip() in wanted
+            return [
+                r for r in all_rows
+                if str(r.get("T") or "").upper().strip() in wanted
             ]
-        else:
-            results = [item for item in raw if isinstance(item, dict)]
-        # Free the big raw JSON list ASAP — important on 512MB Render Free.
-        del raw
-        payload.clear() if isinstance(payload, dict) else None
-        self._save_grouped_cache(day, results)
-        return results
+        return all_rows
 
     def _fetch_daily(self, symbol: str, start: date, end: date) -> pd.DataFrame:
         return self._fetch_aggregate(symbol, start, end, 1, "day")

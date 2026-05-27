@@ -29,14 +29,38 @@ def render_fast_mode() -> bool:
     return os.getenv("SCAN_RENDER_FAST", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+_RENDER_FREE_HARD_CAP = 1500
+
+
 def cloud_symbol_cap() -> int | None:
-    """Optional universe cap on cloud (0 / unset = full universe)."""
+    """Universe cap on cloud.
+
+    Honours SCAN_CLOUD_MAX_SYMBOLS (0/unset = no explicit cap) but always
+    enforces a SAFE upper bound on Render Free (512MB) to prevent OOM. The
+    user can lift the cap by upgrading to Render Starter+ and setting
+    SCAN_RENDER_PLAN=starter (or similar) to disable the safety.
+    """
     raw = os.getenv("SCAN_CLOUD_MAX_SYMBOLS", "").strip()
-    if not raw or raw in {"0", "all", "full"}:
-        return None
+    explicit: int | None = None
     if raw.isdigit() and int(raw) > 0:
-        return int(raw)
-    return None
+        explicit = int(raw)
+
+    if not is_render_host() or not is_polygon_provider():
+        return explicit
+
+    # Render: enforce hard safety cap unless the user opted out by signalling
+    # they're on a larger plan.
+    plan = os.getenv("SCAN_RENDER_PLAN", "free").strip().lower()
+    if plan in {"starter", "standard", "pro", "performance"}:
+        return explicit
+
+    if explicit is None or explicit > _RENDER_FREE_HARD_CAP:
+        return _RENDER_FREE_HARD_CAP
+    return explicit
+
+
+def is_polygon_provider() -> bool:
+    return os.getenv("DATA_PROVIDER", "polygon").strip().lower() == "polygon"
 
 
 def cap_scan_workers(requested: int | str | None = None) -> int:
