@@ -90,6 +90,56 @@ def apply_render_fast_env() -> None:
         os.environ.setdefault("SCAN_POLYGON_BULK", "true")
 
 
+# Safe upper bounds for every memory-sensitive env var when running on
+# Render Free (512MB). These OVERRIDE any value the user may have set in
+# the Render dashboard from earlier sessions — values are clamped down,
+# never up. Disable by setting SCAN_RENDER_PLAN=starter/standard/pro.
+_RENDER_FREE_SAFE_LIMITS: dict[str, int] = {
+    "SCAN_POLYGON_GROUPED_WORKERS": 3,
+    "SCAN_POLYGON_PAUSE": 0,
+    "SCAN_TRIM_BARS": 90,
+    "SCAN_WORKERS": 3,
+    "SCAN_ANALYZE_WORKERS": 2,
+    "SCAN_CLOUD_MAX_SYMBOLS": 1500,
+}
+
+
+def enforce_render_free_safety(env: dict[str, str]) -> dict[str, str]:
+    """Clamp memory-sensitive env vars to safe values on Render Free.
+
+    Render dashboard env vars persist across blueprint syncs, so an old
+    SCAN_CLOUD_MAX_SYMBOLS=0 (or similar) silently overrides whatever
+    render.yaml says. This function rewrites the in-flight subprocess env
+    so the scan ALWAYS runs with safe defaults, regardless of stale
+    dashboard values, unless SCAN_RENDER_PLAN signals a larger plan.
+    """
+    if not is_render_host():
+        return env
+    plan = (env.get("SCAN_RENDER_PLAN") or os.getenv("SCAN_RENDER_PLAN", "free")).strip().lower()
+    if plan in {"starter", "standard", "pro", "performance"}:
+        return env
+
+    for key, safe_max in _RENDER_FREE_SAFE_LIMITS.items():
+        raw = (env.get(key) or "").strip()
+        if not raw:
+            env[key] = str(safe_max)
+            continue
+        if key == "SCAN_CLOUD_MAX_SYMBOLS" and raw in {"0", "all", "full"}:
+            env[key] = str(safe_max)
+            continue
+        try:
+            user_val = float(raw) if "." in raw else int(raw)
+        except (TypeError, ValueError):
+            env[key] = str(safe_max)
+            continue
+        if key == "SCAN_POLYGON_PAUSE":
+            env[key] = str(max(0.0, min(float(user_val), 12.0)))
+        else:
+            clamped = int(min(max(int(user_val), 1), safe_max))
+            env[key] = str(clamped)
+    return env
+
+
 def build_scan_subprocess_env(base: dict | None = None) -> dict:
     """Copy process env and ensure scan paths; cap workers on cloud."""
     from src.polygon_key_store import build_scan_process_env, resolve_polygon_api_key
@@ -104,6 +154,9 @@ def build_scan_subprocess_env(base: dict | None = None) -> dict:
     env.setdefault("SCAN_PROGRESS_PATH", str(PROGRESS_PATH))
     env.setdefault("RENDER", os.getenv("RENDER", ""))
     apply_render_fast_env()
+    # Clamp memory-sensitive env vars to Render Free safe values regardless
+    # of what the user has set in the Render dashboard.
+    env = enforce_render_free_safety(env)
     workers = cap_scan_workers(env.get("SCAN_WORKERS"))
     analyze = env.get("SCAN_ANALYZE_WORKERS", "").strip()
     if analyze.isdigit():
