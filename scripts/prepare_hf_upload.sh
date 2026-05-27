@@ -29,7 +29,7 @@ copy "$ROOT/data/universe/sector_map.csv" "data/universe/sector_map.csv"
 mkdir -p "$OUT/data/reports"
 REPORT_COUNT=0
 for suffix in us_simple us_medium us_full; do
-  LATEST="$(ls -t "$ROOT/data/reports/"*_"${suffix}"_report.csv 2>/dev/null | head -1)"
+  LATEST="$(ls -t "$ROOT/data/reports/"*_"${suffix}"_report.csv 2>/dev/null | head -1 || true)"
   if [[ -n "$LATEST" && -f "$LATEST" ]]; then
     cp "$LATEST" "$OUT/data/reports/"
     echo "דוח נוסף: $(basename "$LATEST")"
@@ -56,10 +56,18 @@ fi
 rm -rf "$OUT/**/__pycache__" "$OUT/**/.DS_Store" 2>/dev/null || true
 find "$OUT" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 
-rm -f "$ZIP"
-(cd "$OUT" && zip -r "$ZIP" . -x "*.DS_Store")
-
 echo ""
 echo "מוכן:"
 echo "  תיקייה: $OUT"
-echo "  ZIP:    $ZIP"
+if command -v zip >/dev/null 2>&1; then
+  ZIP_DIR="$(dirname "$ZIP")"
+  mkdir -p "$ZIP_DIR"
+  rm -f "$ZIP"
+  if (cd "$OUT" && zip -qr "$ZIP" . -x "*.DS_Store"); then
+    echo "  ZIP:    $ZIP"
+  else
+    echo "  ZIP:    (לא נוצר)"
+  fi
+else
+  echo "  ZIP:    (דילג — אין zip)"
+fi
