@@ -56,7 +56,7 @@ def main() -> int:
     args = parser.parse_args()
 
     apply_render_fast_env()
-    write_progress(1, "מתחיל", message="Apex Scanner — מאתחל…")
+    write_progress(1, "מתחיל", message="Apex Scanner — מאתחל…", force=True)
 
     from src.polygon_key_store import apply_polygon_key_to_env, resolve_polygon_api_key
 
@@ -72,6 +72,12 @@ def main() -> int:
             print("scanner_status=error")
             print("error_message=חסר POLYGON_API_KEY — הוסף מפתח ב-Render Environment או בדשבורד.")
             return 1
+        write_progress(
+            2,
+            "אימות",
+            message="בודק מפתח Polygon…",
+            force=True,
+        )
         from src.polygon_preflight import validate_polygon_api_key
 
         ok, msg = validate_polygon_api_key()
@@ -80,7 +86,9 @@ def main() -> int:
             print("scanner_status=error")
             print(f"error_message=מפתח Polygon לא תקין: {msg}")
             return 1
+        write_progress(3, "אימות", message="מפתח Polygon אומת ✓", force=True)
 
+    write_progress(3, "אתחול", message="טוען הגדרות וספק נתונים…", force=True)
     settings = load_settings()
     ensure_directories(settings)
     _setup_logging(settings.log_level)
@@ -95,6 +103,7 @@ def main() -> int:
         print(f"error_message={exc}")
         return 1
 
+    write_progress(4, "אתחול", message="טוען רשימת מניות…", force=True)
     tickers = load_csv_universe(args.universe_csv)
     sector_map = load_sector_map(args.sector_map)
     if args.limit:
@@ -111,7 +120,13 @@ def main() -> int:
     n = len(tickers)
 
     log.info("Apex scan: provider=%s symbols=%d workers=%d trim=%d", settings.provider, n, workers, trim)
-    write_progress(3, "מתחיל", total=n, message=f"Apex: סורק {n:,} מניות")
+    write_progress(
+        5,
+        "טעינה",
+        total=n,
+        message=f"Apex: מתחיל הורדת נתונים ל-{n:,} מניות ({workers} threads)…",
+        force=True,
+    )
 
     universe = load_universe_bars(
         tickers,
