@@ -60,5 +60,10 @@ services:
       # Default 3h: on first open it scans immediately, then every 3h until the tab is closed.
       - key: SCAN_AUTO_INTERVAL_HOURS
         value: "3"
+      # Skip the pre-scan Polygon API key validation. Useful if the validation
+      # endpoints are rate-limited / unreachable but your key is in fact valid.
+      # Default false (validate before scanning to fail fast with a clear msg).
+      - key: SCAN_SKIP_POLYGON_PREFLIGHT
+        value: "false"
       - key: DASHBOARD_PASSWORD
         sync: false

@@ -72,21 +72,37 @@ def main() -> int:
             print("scanner_status=error")
             print("error_message=חסר POLYGON_API_KEY — הוסף מפתח ב-Render Environment או בדשבורד.")
             return 1
-        write_progress(
-            2,
-            "אימות",
-            message="בודק מפתח Polygon…",
-            force=True,
-        )
-        from src.polygon_preflight import validate_polygon_api_key
+        skip_preflight = os.getenv("SCAN_SKIP_POLYGON_PREFLIGHT", "").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+        if skip_preflight:
+            write_progress(
+                3,
+                "אתחול",
+                message="מדלג על אימות מפתח Polygon (SCAN_SKIP_POLYGON_PREFLIGHT=1)…",
+                force=True,
+            )
+        else:
+            write_progress(
+                2,
+                "אימות",
+                message="בודק מפתח Polygon…",
+                force=True,
+            )
+            from src.polygon_preflight import validate_polygon_api_key
 
-        ok, msg = validate_polygon_api_key()
-        if not ok:
-            clear_progress()
-            print("scanner_status=error")
-            print(f"error_message=מפתח Polygon לא תקין: {msg}")
-            return 1
-        write_progress(3, "אימות", message="מפתח Polygon אומת ✓", force=True)
+            ok, msg = validate_polygon_api_key()
+            if not ok:
+                clear_progress()
+                print("scanner_status=error")
+                clean_msg = " ".join(str(msg).split())
+                print(
+                    f"error_message=מפתח Polygon לא תקין: {clean_msg} | "
+                    "אפשר לעקוף את הבדיקה ב-Render Environment: "
+                    "SCAN_SKIP_POLYGON_PREFLIGHT=1"
+                )
+                return 1
+            write_progress(3, "אימות", message="מפתח Polygon אומת ✓", force=True)
 
     write_progress(3, "אתחול", message="טוען הגדרות וספק נתונים…", force=True)
     settings = load_settings()
