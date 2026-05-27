@@ -107,22 +107,36 @@ def _read_status() -> dict:
 
     state = str(data.get("state", "idle"))
 
-    if state == "running" and PID_PATH.exists():
-        try:
-            pid = int(PID_PATH.read_text().strip())
-            os.kill(pid, 0)
-        except (OSError, ValueError):
+    if state == "running":
+        if not PID_PATH.exists():
+            # Render Free has ephemeral disk: when the container restarts
+            # (e.g. after OOM 502) the PID file is gone but the stale
+            # 'running' status persists. Mark error so the UI shows the
+            # cause + retry button instead of a frozen progress bar.
             data = {
                 "state": "error",
-                "message": "התהליך נעצר (ייתכן שהשרת איפס). לחץ שוב על הרץ סריקה.",
+                "message": (
+                    "השרת אותחל באמצע הסריקה (כנראה 502 / OOM). "
+                    "לחץ '🔁 נסה שוב' כדי להפעיל סריקה חדשה."
+                ),
             }
             _write_status(data)
-            PID_PATH.unlink(missing_ok=True)
         else:
-            stale = _maybe_recover_stale_running(data, pid)
-            if stale:
-                _write_status(stale)
-                data = stale
+            try:
+                pid = int(PID_PATH.read_text().strip())
+                os.kill(pid, 0)
+            except (OSError, ValueError):
+                data = {
+                    "state": "error",
+                    "message": "התהליך נעצר (ייתכן שהשרת איפס). לחץ שוב על הרץ סריקה.",
+                }
+                _write_status(data)
+                PID_PATH.unlink(missing_ok=True)
+            else:
+                stale = _maybe_recover_stale_running(data, pid)
+                if stale:
+                    _write_status(stale)
+                    data = stale
     elif state == "ok" and data.get("report_file"):
         save_last_report(str(data["report_file"]), str(data.get("profile", "")))
     elif state in ("error", "idle"):

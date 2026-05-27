@@ -8,8 +8,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PROGRESS_PATH = ROOT / "data" / "reports" / ".scan_progress.json"
 
-# Polygon / heavy profiles: keep low on Render Free (512MB).
-_RENDER_MAX_WORKERS = 4
+# Polygon / heavy profiles: keep low on Render Free (512MB). 8x parallel
+# bulk fetches at 5+MB JSON each is enough to OOM the container, so the
+# scanning thread pool is intentionally small. Crank up only when running
+# on a larger Render plan.
+_RENDER_MAX_WORKERS = 3
 # Demo is in-process CPU only — more threads helps on multi-core hosts.
 _RENDER_DEMO_MAX_WORKERS = 8
 
