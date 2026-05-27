@@ -81,7 +81,14 @@ def main() -> int:
     env = build_scan_subprocess_env(os.environ.copy())
     workers = cap_scan_workers(env.get("SCAN_WORKERS"))
     env["SCAN_WORKERS"] = str(workers)
-    env["SCAN_ANALYZE_WORKERS"] = str(workers)
+    # Honour SCAN_ANALYZE_WORKERS if set (used to lower analyze concurrency
+    # without lowering data-load concurrency). Default to the data workers.
+    analyze_raw = env.get("SCAN_ANALYZE_WORKERS", "").strip()
+    if analyze_raw.isdigit() and int(analyze_raw) > 0:
+        analyze_workers = max(1, min(int(analyze_raw), workers))
+    else:
+        analyze_workers = workers
+    env["SCAN_ANALYZE_WORKERS"] = str(analyze_workers)
     write_progress(
         4,
         "מתחיל",
@@ -104,6 +111,8 @@ def main() -> int:
             "--no-charts",
             "--workers",
             str(workers),
+            "--analyze-workers",
+            str(analyze_workers),
         ]
     else:
         cmd = [
