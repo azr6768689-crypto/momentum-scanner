@@ -74,6 +74,8 @@ class PolygonProvider(DataProvider):
         retry_max_attempts: int = 4,
         retry_initial_backoff: float = 1.0,
         retry_max_backoff: float = 30.0,
+        rate_limit_max_attempts: int | None = None,
+        rate_limit_max_sleep: float = 60.0,
     ) -> None:
         if not api_key:
             raise ValueError("PolygonProvider requires a non-empty API key.")
@@ -83,6 +85,8 @@ class PolygonProvider(DataProvider):
             "User-Agent": "momentum-system/0.1",
         })
         self._cache = _ParquetCache(cache_dir, cache_ttl_hours, cache_enabled, self.name)
+        self._rate_limit_max_attempts = max(1, int(rate_limit_max_attempts or retry_max_attempts))
+        self._rate_limit_max_sleep = max(0.0, float(rate_limit_max_sleep))
         self._retry = retry(
             stop=stop_after_attempt(retry_max_attempts),
             wait=wait_exponential(multiplier=retry_initial_backoff, max=retry_max_backoff),
@@ -96,6 +100,31 @@ class PolygonProvider(DataProvider):
     @staticmethod
     def normalize_symbol(symbol: str) -> str:
         return symbol.upper().strip().replace(".", "-")
+
+    def _sleep_after_rate_limit(self, resp: requests.Response, label: str, attempt: int) -> None:
+        retry_after = resp.headers.get("Retry-After")
+        try:
+            sleep_for = float(retry_after) if retry_after else 10.0
+        except ValueError:
+            sleep_for = 10.0
+        if self._rate_limit_max_sleep <= 0:
+            sleep_for = 0.0
+        else:
+            sleep_for = max(1.0, min(sleep_for, self._rate_limit_max_sleep))
+        log.warning(
+            "%s rate limit hit (%d/%d); sleeping %.0fs",
+            label,
+            attempt,
+            self._rate_limit_max_attempts,
+            sleep_for,
+        )
+        if sleep_for > 0:
+            time.sleep(sleep_for)
+
+    def _rate_limit_exhausted(self, label: str) -> RateLimitError:
+        return RateLimitError(
+            f"{label} remained rate limited after {self._rate_limit_max_attempts} attempts"
+        )
 
     def load_universe_daily_bars(
         self,
@@ -247,20 +276,19 @@ class PolygonProvider(DataProvider):
             "apiKey": self._api_key,
         }
 
+        rate_limit_attempts = 0
         while url:
             resp = self._session.get(url, params=params, timeout=30)
             params = {}
             if resp.status_code == 429:
-                retry_after = resp.headers.get("Retry-After")
-                try:
-                    sleep_for = float(retry_after) if retry_after else 10.0
-                except ValueError:
-                    sleep_for = 10.0
-                log.warning("Polygon reference rate limit hit; sleeping %.0fs", sleep_for)
-                time.sleep(max(1.0, min(sleep_for, 60.0)))
+                rate_limit_attempts += 1
+                if rate_limit_attempts >= self._rate_limit_max_attempts:
+                    raise self._rate_limit_exhausted("Polygon reference")
+                self._sleep_after_rate_limit(resp, "Polygon reference", rate_limit_attempts)
                 continue
             if resp.status_code != 200:
                 raise ProviderError(f"Polygon ticker list HTTP {resp.status_code}: {resp.text[:200]}")
+            rate_limit_attempts = 0
 
             payload = resp.json()
             for item in payload.get("results") or []:
@@ -284,16 +312,12 @@ class PolygonProvider(DataProvider):
         sym = self.normalize_symbol(symbol)
         url = f"{_POLYGON_BASE}/v3/reference/tickers/{sym}"
         params = {"apiKey": self._api_key}
-        while True:
+        for attempt in range(1, self._rate_limit_max_attempts + 1):
             resp = self._session.get(url, params=params, timeout=30)
             if resp.status_code == 429:
-                retry_after = resp.headers.get("Retry-After")
-                try:
-                    sleep_for = float(retry_after) if retry_after else 10.0
-                except ValueError:
-                    sleep_for = 10.0
-                log.warning("Polygon details rate limit hit; sleeping %.0fs", sleep_for)
-                time.sleep(max(1.0, min(sleep_for, 60.0)))
+                if attempt >= self._rate_limit_max_attempts:
+                    raise self._rate_limit_exhausted("Polygon details")
+                self._sleep_after_rate_limit(resp, "Polygon details", attempt)
                 continue
             if resp.status_code == 404:
                 raise SymbolNotFoundError(sym)
@@ -302,6 +326,7 @@ class PolygonProvider(DataProvider):
             payload = resp.json()
             result = payload.get("results") or {}
             return result if isinstance(result, dict) else {}
+        raise self._rate_limit_exhausted("Polygon details")
 
     def get_ticker_news(self, symbol: str, limit: int = 5) -> list[dict[str, Any]]:
         """Fetch recent Polygon news items for one ticker."""
@@ -314,16 +339,12 @@ class PolygonProvider(DataProvider):
             "sort": "published_utc",
             "apiKey": self._api_key,
         }
-        while True:
+        for attempt in range(1, self._rate_limit_max_attempts + 1):
             resp = self._session.get(url, params=params, timeout=30)
             if resp.status_code == 429:
-                retry_after = resp.headers.get("Retry-After")
-                try:
-                    sleep_for = float(retry_after) if retry_after else 10.0
-                except ValueError:
-                    sleep_for = 10.0
-                log.warning("Polygon news rate limit hit; sleeping %.0fs", sleep_for)
-                time.sleep(max(1.0, min(sleep_for, 60.0)))
+                if attempt >= self._rate_limit_max_attempts:
+                    raise self._rate_limit_exhausted("Polygon news")
+                self._sleep_after_rate_limit(resp, "Polygon news", attempt)
                 continue
             if resp.status_code == 404:
                 return []
@@ -332,6 +353,7 @@ class PolygonProvider(DataProvider):
             payload = resp.json()
             results = payload.get("results") or []
             return [item for item in results if isinstance(item, dict)]
+        raise self._rate_limit_exhausted("Polygon news")
 
     def _fetch_grouped_day(self, day: date) -> list[dict[str, Any]]:
         url = f"{_POLYGON_BASE}/v2/aggs/grouped/locale/us/market/stocks/{day.isoformat()}"
@@ -340,13 +362,7 @@ class PolygonProvider(DataProvider):
         if resp.status_code == 404:
             return []
         if resp.status_code == 429:
-            retry_after = resp.headers.get("Retry-After")
-            try:
-                sleep_for = float(retry_after) if retry_after else 10.0
-            except ValueError:
-                sleep_for = 10.0
-            log.warning("Polygon grouped rate limit; sleeping %.0fs", sleep_for)
-            time.sleep(max(1.0, min(sleep_for, 60.0)))
+            self._sleep_after_rate_limit(resp, "Polygon grouped", 1)
             raise RateLimitError("Polygon grouped HTTP 429")
         if resp.status_code != 200:
             raise ProviderError(f"Polygon grouped HTTP {resp.status_code} for {day}: {resp.text[:200]}")
@@ -377,13 +393,7 @@ class PolygonProvider(DataProvider):
         if resp.status_code == 404:
             raise SymbolNotFoundError(symbol)
         if resp.status_code == 429:
-            retry_after = resp.headers.get("Retry-After")
-            try:
-                sleep_for = float(retry_after) if retry_after else 10.0
-            except ValueError:
-                sleep_for = 10.0
-            log.warning("Polygon rate limit hit (HTTP 429); sleeping %.0fs before retry", sleep_for)
-            time.sleep(max(1.0, min(sleep_for, 60.0)))
+            self._sleep_after_rate_limit(resp, "Polygon", 1)
             raise RateLimitError("Polygon HTTP 429")
         if resp.status_code != 200:
             raise ProviderError(f"Polygon HTTP {resp.status_code} for {symbol}: {resp.text[:200]}")
