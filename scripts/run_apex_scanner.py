@@ -137,7 +137,11 @@ def main() -> int:
         env_trim = os.getenv("SCAN_TRIM_BARS", "").strip()
         trim = int(env_trim) if env_trim.isdigit() else 126
 
-    end = date.today()
+    # Polygon Starter (15-min delayed) refuses today's grouped daily data
+    # until end-of-day with HTTP 403. We always end at yesterday to avoid
+    # the error and the wasted retry; the trade-off is a 1-day-stale scan,
+    # which is acceptable for momentum/RS signals.
+    end = date.today() - timedelta(days=1)
     start = end - timedelta(days=max(int(trim * 1.8) + 60, 280))
     workers = args.workers or _default_workers()
     n = len(tickers)
@@ -204,7 +208,12 @@ def main() -> int:
         clear_progress()
         print("scanner_status=error")
         if settings.provider == "polygon":
-            print("error_message=אין נתונים מ-Polygon — בדוק מפתח API ומנוי Stocks.")
+            print(
+                "error_message=הסריקה רצה אבל אף מניה לא עברה את מבחני הדאטה. "
+                f"נטענו {n} מניות, ואף אחת לא קיבלה ציון. "
+                "בדוק בלוג למעלה כמה מהן היו עם פחות מ-60 ימי דאטה. "
+                "אם רוב המניות מסומנות '<60 bars' — Polygon מחזיר טווח חלקי לתוכנית שלך."
+            )
         else:
             print("error_message=לא נמצאו מניות עם דאטה לסריקה.")
         return 1
