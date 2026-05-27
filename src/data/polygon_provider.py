@@ -8,8 +8,10 @@ The key is read through Settings and is never printed or logged.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from pathlib import Path
 from typing import Any, Callable
@@ -107,35 +109,73 @@ class PolygonProvider(DataProvider):
     ) -> dict[str, pd.DataFrame]:
         """Load many tickers via Polygon grouped daily bars (one API call per session day).
 
-        Much faster than per-symbol range requests for full-universe scans (~150 calls
-        vs thousands). Falls back to empty frames for symbols with no bars in range.
+        Much faster than per-symbol range requests for full-universe scans
+        (~150 calls vs thousands). Falls back to empty frames for symbols with
+        no bars in range.
+
+        Concurrency / pacing are configurable via env vars (set in render.yaml):
+          - SCAN_POLYGON_GROUPED_WORKERS (default 8): parallel day fetches.
+            Polygon Starter+ has unlimited calls, so 8-16 is safe.
+            Set to 1 for the free tier (5 req/min hard limit).
+          - SCAN_POLYGON_PAUSE (default 0.0): seconds to sleep between
+            request submissions. Free tier should use ~12.
         """
         wanted = {self.normalize_symbol(s) for s in symbols if str(s).strip()}
         if not wanted:
             return {}
 
         buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        session_days = pd.bdate_range(start=pd.Timestamp(start), end=pd.Timestamp(end))
+        session_days = list(pd.bdate_range(start=pd.Timestamp(start), end=pd.Timestamp(end)))
         total_days = len(session_days)
-        pause = 0.11  # ~9 req/s — under typical starter tier limits
 
-        for idx, ts in enumerate(session_days, start=1):
-            day = ts.date()
+        try:
+            workers = max(1, int(os.getenv("SCAN_POLYGON_GROUPED_WORKERS", "8")))
+        except ValueError:
+            workers = 8
+        try:
+            pause = max(0.0, float(os.getenv("SCAN_POLYGON_PAUSE", "0.0")))
+        except ValueError:
+            pause = 0.0
+
+        def _fetch(day: date) -> tuple[date, list[dict[str, Any]]]:
             try:
-                rows = self._retry(self._fetch_grouped_day)(day)
+                return day, self._retry(self._fetch_grouped_day)(day)
             except SymbolNotFoundError:
-                rows = []
+                return day, []
             except Exception as exc:
                 log.warning("Grouped daily fetch failed for %s: %s", day, exc)
-                rows = []
-            for row in rows:
-                sym = str(row.get("T") or "").upper().strip()
-                if sym in wanted:
-                    buckets[sym].append(row)
-            if on_progress is not None:
-                on_progress(idx, total_days)
-            if idx < total_days:
-                time.sleep(pause)
+                return day, []
+
+        done = 0
+        if workers <= 1:
+            for ts in session_days:
+                day = ts.date()
+                _, rows = _fetch(day)
+                for row in rows:
+                    sym = str(row.get("T") or "").upper().strip()
+                    if sym in wanted:
+                        buckets[sym].append(row)
+                done += 1
+                if on_progress is not None:
+                    on_progress(done, total_days)
+                if pause > 0 and done < total_days:
+                    time.sleep(pause)
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = []
+                for ts in session_days:
+                    futures.append(pool.submit(_fetch, ts.date()))
+                    if pause > 0:
+                        time.sleep(pause)
+                for fut in as_completed(futures):
+                    _day, rows = fut.result()
+                    for row in rows:
+                        sym = str(row.get("T") or "").upper().strip()
+                        if sym in wanted:
+                            buckets[sym].append(row)
+                    done += 1
+                    if on_progress is not None:
+                        on_progress(done, total_days)
 
         out: dict[str, pd.DataFrame] = {}
         for sym in wanted:
